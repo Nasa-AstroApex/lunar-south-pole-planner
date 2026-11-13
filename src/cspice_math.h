@@ -5,9 +5,8 @@
 
 #define MAX_COMPARISON_SITES 8
 #define HORIZON_BINS 360
-#define MAX_SIMULATION_STEPS 15000
+#define MAX_SIMULATION_STEPS 20000
 
-// Tek bir zaman adımına ait telemetri örneği
 typedef struct {
     int step_index;
     char utc[32];
@@ -22,14 +21,12 @@ typedef struct {
     bool is_earth_visible;
 } TimeSample;
 
-// Kesintisiz görünürlük penceresi (Başlangıç, Bitiş, Süre)
 typedef struct {
     char start_utc[32];
     char end_utc[32];
     double duration_hours;
 } VisibilityWindow;
 
-// Saha özet metrikleri
 typedef struct {
     char site_name[64];
     double latitude_deg;
@@ -53,10 +50,10 @@ typedef struct {
     int mission_score;
 } SiteSummary;
 
-// Tüm simülasyon çıktısını taşıyan ana paket
 typedef struct {
-    int status; // 0 = Başarılı, -1 = Hata
+    int status;
     char error_msg[256];
+    bool using_real_dem;
     bool dem_out_of_bounds;
     char warning_msg[256];
 

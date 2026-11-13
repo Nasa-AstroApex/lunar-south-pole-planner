@@ -69,10 +69,11 @@ int init_spice_engine(const char *custom_kernel_dir) {
     return 0;
 }
 
-static void load_or_generate_horizon_mask(double lat, double lon, bool use_dem, double mask[HORIZON_BINS]) {
+// Gerçek LOLA DEM okunduysa true, sentetik yedek üretildiyse false döndürür
+static bool load_or_generate_horizon_mask(double lat, double lon, bool use_dem, double mask[HORIZON_BINS]) {
     if (!use_dem) {
         for (int i = 0; i < HORIZON_BINS; i++) mask[i] = 0.0;
-        return;
+        return false;
     }
 
     const char *dem_path = NULL;
@@ -114,14 +115,14 @@ static void load_or_generate_horizon_mask(double lat, double lon, bool use_dem, 
 
                     munmap(mapped, file_size);
                     close(fd);
-                    return;
+                    return true; // Gerçek DEM yüklendi
                 }
             }
             close(fd);
         }
     }
 
-    // DEM dosyası henüz yüklenmemişse koordinata özgü krater sırtı profili üret
+    // DEM dosyası yoksa sentetik krater profili üret
     double site_phase = (fabs(lat) * 1.7 + fabs(lon) * 0.05);
     double base_ridge = (fabs(lat) > 89.0) ? 1.8 : 2.6;
 
@@ -132,6 +133,8 @@ static void load_or_generate_horizon_mask(double lat, double lon, bool use_dem, 
         double val = base_ridge + crater_wall + micro_relief;
         mask[az] = (val < 0.2) ? 0.2 : val;
     }
+
+    return false; // Sentetik fallback kullanıldı
 }
 
 static int simulate_single_site(
@@ -148,6 +151,7 @@ static int simulate_single_site(
     bool include_earth_disk,
     SiteSummary *out_summary,
     double out_mask[HORIZON_BINS],
+    bool *out_used_real_dem,
     TimeSample *out_samples,
     VisibilityWindow **out_sun_windows,
     int *out_sun_win_count,
@@ -161,7 +165,8 @@ static int simulate_single_site(
     out_summary->altitude_m = altitude_m;
 
     double local_mask[HORIZON_BINS];
-    load_or_generate_horizon_mask(lat, lon, use_dem_horizon, local_mask);
+    bool real_dem = load_or_generate_horizon_mask(lat, lon, use_dem_horizon, local_mask);
+    if (out_used_real_dem) *out_used_real_dem = real_dem;
     if (out_mask) {
         memcpy(out_mask, local_mask, sizeof(local_mask));
     }
@@ -200,18 +205,17 @@ static int simulate_single_site(
     SpiceDouble sun_win_start_et = 0.0;
     SpiceDouble earth_win_start_et = 0.0;
 
+    // [start_et, end_et) yarı-açık aralık: tam olarak total_steps adet dilim işlenir
     for (int s = 0; s < total_steps; s++) {
         SpiceDouble current_et = start_et + (s * (double)step_seconds);
         SpiceDouble azlsta[6], lt;
 
-        // 1. Güneş
         azlcpo_c("ELLIPSOID", "SUN", current_et, "LT+S", SPICEFALSE, SPICETRUE,
                  site_pos, "MOON", "IAU_MOON", azlsta, &lt);
         double sun_az = azlsta[1] * dpr_c();
         double sun_el = azlsta[2] * dpr_c();
         if (sun_az < 0.0) sun_az += 360.0;
 
-        // 2. Dünya
         azlcpo_c("ELLIPSOID", "EARTH", current_et, "LT+S", SPICEFALSE, SPICETRUE,
                  site_pos, "MOON", "IAU_MOON", azlsta, &lt);
         double earth_range_km = azlsta[0];
@@ -226,7 +230,6 @@ static int simulate_single_site(
             return -1;
         }
 
-        // Dünya diski (uzuv/limb) görünürlüğü istenirse açısal yarıçapı (~0.95°) ekle
         double earth_disk_bonus_deg = 0.0;
         if (include_earth_disk && earth_range_km > 6378.137) {
             earth_disk_bonus_deg = asin(6378.137 / earth_range_km) * dpr_c();
@@ -247,7 +250,6 @@ static int simulate_single_site(
         bool is_sun_vis = (sun_el > effective_sun_limit);
         bool is_earth_vis = ((earth_el + earth_disk_bonus_deg) > effective_earth_limit);
 
-        // Güneş süre ve kesintisiz pencere takibi
         if (is_sun_vis) {
             sun_vis_steps++;
             cur_sun_streak++;
@@ -271,7 +273,6 @@ static int simulate_single_site(
         }
         prev_sun_vis = is_sun_vis;
 
-        // Dünya süre ve kesintisiz DTE pencere takibi
         if (is_earth_vis) {
             earth_vis_steps++;
             cur_earth_streak++;
@@ -315,19 +316,19 @@ static int simulate_single_site(
         }
     }
 
-    // Simülasyon sonunda hala açık olan pencereleri kapat
-    SpiceDouble final_et = start_et + (total_steps * (double)step_seconds);
+    // Tam bitiş anı (end_utc) pencereyi asla aşmaz
+    SpiceDouble exact_end_et = start_et + (total_steps * (double)step_seconds);
     if (prev_sun_vis && sun_wins) {
         et2utc_c(sun_win_start_et, "ISOC", 0, sizeof(sun_wins[sun_win_count].start_utc), sun_wins[sun_win_count].start_utc);
-        et2utc_c(final_et, "ISOC", 0, sizeof(sun_wins[sun_win_count].end_utc), sun_wins[sun_win_count].end_utc);
-        sun_wins[sun_win_count].duration_hours = (final_et - sun_win_start_et) / 3600.0;
+        et2utc_c(exact_end_et, "ISOC", 0, sizeof(sun_wins[sun_win_count].end_utc), sun_wins[sun_win_count].end_utc);
+        sun_wins[sun_win_count].duration_hours = (exact_end_et - sun_win_start_et) / 3600.0;
         sun_win_count++;
     }
     if (prev_earth_vis) {
         if (earth_wins) {
             et2utc_c(earth_win_start_et, "ISOC", 0, sizeof(earth_wins[earth_win_count].start_utc), earth_wins[earth_win_count].start_utc);
-            et2utc_c(final_et, "ISOC", 0, sizeof(earth_wins[earth_win_count].end_utc), earth_wins[earth_win_count].end_utc);
-            earth_wins[earth_win_count].duration_hours = (final_et - earth_win_start_et) / 3600.0;
+            et2utc_c(exact_end_et, "ISOC", 0, sizeof(earth_wins[earth_win_count].end_utc), earth_wins[earth_win_count].end_utc);
+            earth_wins[earth_win_count].duration_hours = (exact_end_et - earth_win_start_et) / 3600.0;
         }
         earth_win_count++;
     }
@@ -355,7 +356,6 @@ static int simulate_single_site(
     out_summary->avg_sun_elevation_deg = sun_el_sum / total_steps;
     out_summary->avg_earth_elevation_deg = earth_el_sum / total_steps;
 
-    // Ağırlıklar: %50 Aydınlanma + %30 Dünya Görüşü + %20 Düşük Karanlık Süre
     double illum_score = out_summary->illumination_percent * 0.50;
     double earth_score = out_summary->earth_visibility_percent * 0.30;
     double dark_ratio = (total_duration_hours > 0.0) ? (out_summary->longest_dark_hours / total_duration_hours) : 0.0;
@@ -414,7 +414,8 @@ SimulationResult run_lunar_simulation(
         end_et = start_et + (14.0 * 86400.0);
     }
 
-    int total_steps = (int)floor((end_et - start_et) / (double)step_seconds) + 1;
+    // DÜZELTME: +1 kaldırıldı; 336 saat / 1 saat = tam 336 adım
+    int total_steps = (int)floor((end_et - start_et) / (double)step_seconds);
     if (total_steps < 1) total_steps = 1;
     if (total_steps > MAX_SIMULATION_STEPS) {
         total_steps = MAX_SIMULATION_STEPS;
@@ -422,36 +423,27 @@ SimulationResult run_lunar_simulation(
                  "Zaman aralığı maksimum adım sınırına (%d örnek) kırpıldı.", MAX_SIMULATION_STEPS);
     }
 
-    double target_lat = -89.90;
-    double target_lon = 0.00;
+    double target_lat = lat_deg;
+    double target_lon = lon_deg;
     double target_alt = altitude_m;
-    const char *resolved_name = (site_name && strlen(site_name) > 0) ? site_name : "Shackleton Rim";
+    const char *resolved_name = (site_name && strlen(site_name) > 0) ? site_name : "Custom Site";
 
-    if (use_custom_coords) {
-        target_lat = lat_deg;
-        target_lon = lon_deg;
-    } else {
-        bool found = false;
+    // Yalnızca özel koordinat verilmemişse aday saha tablosundan koordinat çek
+    if (!use_custom_coords) {
         for (int i = 0; i < NUM_CANDIDATE_SITES; i++) {
             if (strcasecmp(resolved_name, CANDIDATE_SITES[i].name) == 0) {
                 target_lat = CANDIDATE_SITES[i].lat;
                 target_lon = CANDIDATE_SITES[i].lon;
                 if (target_alt == 0.0) target_alt = CANDIDATE_SITES[i].alt_m;
-                found = true;
                 break;
             }
         }
-        if (!found) {
-            target_lat = lat_deg;
-            target_lon = lon_deg;
-        }
     }
 
-    // DEM Kapsama Alanı Kontrolü (-90° ile -80° Güney Kutbu kuşağı)
     if (use_dem_horizon && (target_lat < -90.0 || target_lat > -80.0)) {
         res.dem_out_of_bounds = true;
         snprintf(res.warning_msg, sizeof(res.warning_msg),
-                 "UYARI: Seçilen koordinat (%.2f°) Güney Kutbu DEM kapsama alanı (-80°..-90°) dışında! Ufuk profili yaklaşık üretildi.",
+                 "UYARI: Seçilen koordinat (%.2f°) Güney Kutbu DEM kapsama alanı (-80°..-90°) dışında.",
                  target_lat);
     }
 
@@ -467,7 +459,7 @@ SimulationResult run_lunar_simulation(
             resolved_name, target_lat, target_lon, target_alt,
             start_et, total_steps, step_seconds,
             use_dem_horizon, min_sun_el_deg, min_earth_el_deg, include_earth_disk,
-            &res.summary, res.terrain_horizon_mask, res.samples,
+            &res.summary, res.terrain_horizon_mask, &res.using_real_dem, res.samples,
             &res.sun_windows, &res.sun_window_count,
             &res.earth_windows, &res.earth_window_count) != 0) {
         free_simulation_result(&res);
@@ -476,13 +468,18 @@ SimulationResult run_lunar_simulation(
         return res;
     }
 
+    if (use_dem_horizon && !res.using_real_dem && strlen(res.warning_msg) == 0) {
+        snprintf(res.warning_msg, sizeof(res.warning_msg),
+                 "BİLGİ: data/lola_southpole.bin bulunamadı; analitik sentetik ufuk profili kullanıldı.");
+    }
+
     res.comparison_count = NUM_CANDIDATE_SITES;
     for (int i = 0; i < NUM_CANDIDATE_SITES; i++) {
         simulate_single_site(
             CANDIDATE_SITES[i].name, CANDIDATE_SITES[i].lat, CANDIDATE_SITES[i].lon, CANDIDATE_SITES[i].alt_m,
             start_et, total_steps, step_seconds,
             use_dem_horizon, min_sun_el_deg, min_earth_el_deg, include_earth_disk,
-            &res.comparisons[i], NULL, NULL, NULL, NULL, NULL, NULL
+            &res.comparisons[i], NULL, NULL, NULL, NULL, NULL, NULL, NULL
         );
     }
 

@@ -140,6 +140,9 @@ static int l_nasa_compute_c(lua_State *L_vm) {
         return 1;
     }
 
+    lua_pushboolean(L_vm, res.using_real_dem);
+    lua_setfield(L_vm, -2, "using_real_dem");
+
     lua_pushboolean(L_vm, res.dem_out_of_bounds);
     lua_setfield(L_vm, -2, "dem_out_of_bounds");
 
@@ -317,6 +320,14 @@ int main(int argc, char **argv) {
             "{\"site_name\":\"Shackleton Rim\",\"start_utc\":\"2026-10-18T00:00:00\",\"end_utc\":\"2026-11-01T00:00:00\",\"step_seconds\":3600}";
 
         char *out = execute_lua_pipeline(req_json ? req_json : fallback_req);
+        if (strstr(out, "\"status\":\"ERROR\"") != NULL) {
+            fprintf(stderr, "[CLI HATA] Simülasyon başarısız: %s\n", out);
+            free(out);
+            free(req_json);
+            lua_close(L);
+            return 1;
+        }
+
         printf("[CLI MODE] %s işlendi -> data/output.json üretildi (%zu byte).\n",
                req_json ? "data/input.json" : "varsayılan parametreler", strlen(out));
         free(out);
