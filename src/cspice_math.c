@@ -69,7 +69,6 @@ int init_spice_engine(const char *custom_kernel_dir) {
     return 0;
 }
 
-// Gerçek LOLA DEM okunduysa true, sentetik yedek üretildiyse false döndürür
 static bool load_or_generate_horizon_mask(double lat, double lon, bool use_dem, double mask[HORIZON_BINS]) {
     if (!use_dem) {
         for (int i = 0; i < HORIZON_BINS; i++) mask[i] = 0.0;
@@ -115,14 +114,13 @@ static bool load_or_generate_horizon_mask(double lat, double lon, bool use_dem, 
 
                     munmap(mapped, file_size);
                     close(fd);
-                    return true; // Gerçek DEM yüklendi
+                    return true;
                 }
             }
             close(fd);
         }
     }
 
-    // DEM dosyası yoksa sentetik krater profili üret
     double site_phase = (fabs(lat) * 1.7 + fabs(lon) * 0.05);
     double base_ridge = (fabs(lat) > 89.0) ? 1.8 : 2.6;
 
@@ -134,7 +132,7 @@ static bool load_or_generate_horizon_mask(double lat, double lon, bool use_dem, 
         mask[az] = (val < 0.2) ? 0.2 : val;
     }
 
-    return false; // Sentetik fallback kullanıldı
+    return false;
 }
 
 static int simulate_single_site(
@@ -143,6 +141,7 @@ static int simulate_single_site(
     double lon,
     double altitude_m,
     SpiceDouble start_et,
+    SpiceDouble end_et,
     int total_steps,
     int step_seconds,
     bool use_dem_horizon,
@@ -175,19 +174,22 @@ static int simulate_single_site(
     SpiceDouble site_pos[3];
     latrec_c(radius_km, lon * rpd_c(), lat * rpd_c(), site_pos);
 
-    double step_hours = (double)step_seconds / 3600.0;
-    double total_duration_hours = total_steps * step_hours;
+    double total_requested_seconds = end_et - start_et;
+    if (total_requested_seconds <= 0.0) {
+        total_requested_seconds = (double)total_steps * (double)step_seconds;
+    }
+    double total_duration_hours = total_requested_seconds / 3600.0;
 
-    int sun_vis_steps = 0;
-    int earth_vis_steps = 0;
-    int overlap_steps = 0;
+    double sun_vis_seconds = 0.0;
+    double earth_vis_seconds = 0.0;
+    double overlap_seconds = 0.0;
 
-    int cur_sun_streak = 0, max_sun_streak = 0;
-    int cur_earth_streak = 0, max_earth_streak = 0;
-    int cur_dark_streak = 0, max_dark_streak = 0;
+    double cur_sun_seconds = 0.0, max_sun_seconds = 0.0;
+    double cur_earth_seconds = 0.0, max_earth_seconds = 0.0;
+    double cur_dark_seconds = 0.0, max_dark_seconds = 0.0;
 
-    double sun_el_sum = 0.0;
-    double earth_el_sum = 0.0;
+    double sun_el_weighted_sum = 0.0;
+    double earth_el_weighted_sum = 0.0;
 
     bool prev_sun_vis = false;
     bool prev_earth_vis = false;
@@ -205,18 +207,24 @@ static int simulate_single_site(
     SpiceDouble sun_win_start_et = 0.0;
     SpiceDouble earth_win_start_et = 0.0;
 
-    // [start_et, end_et) yarı-açık aralık: tam olarak total_steps adet dilim işlenir
     for (int s = 0; s < total_steps; s++) {
-        SpiceDouble current_et = start_et + (s * (double)step_seconds);
+        SpiceDouble bin_start_et = start_et + (s * (double)step_seconds);
+        SpiceDouble bin_end_et = bin_start_et + (double)step_seconds;
+        if (bin_end_et > end_et) {
+            bin_end_et = end_et;
+        }
+        double bin_seconds = bin_end_et - bin_start_et;
+        if (bin_seconds < 0.0) bin_seconds = 0.0;
+
         SpiceDouble azlsta[6], lt;
 
-        azlcpo_c("ELLIPSOID", "SUN", current_et, "LT+S", SPICEFALSE, SPICETRUE,
+        azlcpo_c("ELLIPSOID", "SUN", bin_start_et, "LT+S", SPICEFALSE, SPICETRUE,
                  site_pos, "MOON", "IAU_MOON", azlsta, &lt);
         double sun_az = azlsta[1] * dpr_c();
         double sun_el = azlsta[2] * dpr_c();
         if (sun_az < 0.0) sun_az += 360.0;
 
-        azlcpo_c("ELLIPSOID", "EARTH", current_et, "LT+S", SPICEFALSE, SPICETRUE,
+        azlcpo_c("ELLIPSOID", "EARTH", bin_start_et, "LT+S", SPICEFALSE, SPICETRUE,
                  site_pos, "MOON", "IAU_MOON", azlsta, &lt);
         double earth_range_km = azlsta[0];
         double earth_az = azlsta[1] * dpr_c();
@@ -251,42 +259,42 @@ static int simulate_single_site(
         bool is_earth_vis = ((earth_el + earth_disk_bonus_deg) > effective_earth_limit);
 
         if (is_sun_vis) {
-            sun_vis_steps++;
-            cur_sun_streak++;
-            if (cur_sun_streak > max_sun_streak) max_sun_streak = cur_sun_streak;
-            cur_dark_streak = 0;
+            sun_vis_seconds += bin_seconds;
+            cur_sun_seconds += bin_seconds;
+            if (cur_sun_seconds > max_sun_seconds) max_sun_seconds = cur_sun_seconds;
+            cur_dark_seconds = 0.0;
 
             if (!prev_sun_vis) {
-                sun_win_start_et = current_et;
+                sun_win_start_et = bin_start_et;
             }
         } else {
-            cur_dark_streak++;
-            if (cur_dark_streak > max_dark_streak) max_dark_streak = cur_dark_streak;
-            cur_sun_streak = 0;
+            cur_dark_seconds += bin_seconds;
+            if (cur_dark_seconds > max_dark_seconds) max_dark_seconds = cur_dark_seconds;
+            cur_sun_seconds = 0.0;
 
             if (prev_sun_vis && sun_wins) {
                 et2utc_c(sun_win_start_et, "ISOC", 0, sizeof(sun_wins[sun_win_count].start_utc), sun_wins[sun_win_count].start_utc);
-                et2utc_c(current_et, "ISOC", 0, sizeof(sun_wins[sun_win_count].end_utc), sun_wins[sun_win_count].end_utc);
-                sun_wins[sun_win_count].duration_hours = (current_et - sun_win_start_et) / 3600.0;
+                et2utc_c(bin_start_et, "ISOC", 0, sizeof(sun_wins[sun_win_count].end_utc), sun_wins[sun_win_count].end_utc);
+                sun_wins[sun_win_count].duration_hours = (bin_start_et - sun_win_start_et) / 3600.0;
                 sun_win_count++;
             }
         }
         prev_sun_vis = is_sun_vis;
 
         if (is_earth_vis) {
-            earth_vis_steps++;
-            cur_earth_streak++;
-            if (cur_earth_streak > max_earth_streak) max_earth_streak = cur_earth_streak;
+            earth_vis_seconds += bin_seconds;
+            cur_earth_seconds += bin_seconds;
+            if (cur_earth_seconds > max_earth_seconds) max_earth_seconds = cur_earth_seconds;
 
             if (!prev_earth_vis) {
-                earth_win_start_et = current_et;
+                earth_win_start_et = bin_start_et;
             }
         } else {
-            cur_earth_streak = 0;
+            cur_earth_seconds = 0.0;
             if (prev_earth_vis && earth_wins) {
                 et2utc_c(earth_win_start_et, "ISOC", 0, sizeof(earth_wins[earth_win_count].start_utc), earth_wins[earth_win_count].start_utc);
-                et2utc_c(current_et, "ISOC", 0, sizeof(earth_wins[earth_win_count].end_utc), earth_wins[earth_win_count].end_utc);
-                earth_wins[earth_win_count].duration_hours = (current_et - earth_win_start_et) / 3600.0;
+                et2utc_c(bin_start_et, "ISOC", 0, sizeof(earth_wins[earth_win_count].end_utc), earth_wins[earth_win_count].end_utc);
+                earth_wins[earth_win_count].duration_hours = (bin_start_et - earth_win_start_et) / 3600.0;
                 earth_win_count++;
             } else if (prev_earth_vis) {
                 earth_win_count++;
@@ -295,16 +303,17 @@ static int simulate_single_site(
         prev_earth_vis = is_earth_vis;
 
         if (is_sun_vis && is_earth_vis) {
-            overlap_steps++;
+            overlap_seconds += bin_seconds;
         }
 
-        sun_el_sum += sun_el;
-        earth_el_sum += earth_el;
+        sun_el_weighted_sum += sun_el * bin_seconds;
+        earth_el_weighted_sum += earth_el * bin_seconds;
 
         if (out_samples != NULL) {
             out_samples[s].step_index = s;
-            et2utc_c(current_et, "ISOC", 0, sizeof(out_samples[s].utc), out_samples[s].utc);
-            out_samples[s].et_seconds = current_et;
+            et2utc_c(bin_start_et, "ISOC", 0, sizeof(out_samples[s].utc), out_samples[s].utc);
+            out_samples[s].et_seconds = bin_start_et;
+            out_samples[s].duration_seconds = bin_seconds;
             out_samples[s].sun_azimuth_deg = sun_az;
             out_samples[s].sun_elevation_deg = sun_el;
             out_samples[s].earth_azimuth_deg = earth_az;
@@ -316,19 +325,17 @@ static int simulate_single_site(
         }
     }
 
-    // Tam bitiş anı (end_utc) pencereyi asla aşmaz
-    SpiceDouble exact_end_et = start_et + (total_steps * (double)step_seconds);
     if (prev_sun_vis && sun_wins) {
         et2utc_c(sun_win_start_et, "ISOC", 0, sizeof(sun_wins[sun_win_count].start_utc), sun_wins[sun_win_count].start_utc);
-        et2utc_c(exact_end_et, "ISOC", 0, sizeof(sun_wins[sun_win_count].end_utc), sun_wins[sun_win_count].end_utc);
-        sun_wins[sun_win_count].duration_hours = (exact_end_et - sun_win_start_et) / 3600.0;
+        et2utc_c(end_et, "ISOC", 0, sizeof(sun_wins[sun_win_count].end_utc), sun_wins[sun_win_count].end_utc);
+        sun_wins[sun_win_count].duration_hours = (end_et - sun_win_start_et) / 3600.0;
         sun_win_count++;
     }
     if (prev_earth_vis) {
         if (earth_wins) {
             et2utc_c(earth_win_start_et, "ISOC", 0, sizeof(earth_wins[earth_win_count].start_utc), earth_wins[earth_win_count].start_utc);
-            et2utc_c(exact_end_et, "ISOC", 0, sizeof(earth_wins[earth_win_count].end_utc), earth_wins[earth_win_count].end_utc);
-            earth_wins[earth_win_count].duration_hours = (exact_end_et - earth_win_start_et) / 3600.0;
+            et2utc_c(end_et, "ISOC", 0, sizeof(earth_wins[earth_win_count].end_utc), earth_wins[earth_win_count].end_utc);
+            earth_wins[earth_win_count].duration_hours = (end_et - earth_win_start_et) / 3600.0;
         }
         earth_win_count++;
     }
@@ -342,19 +349,19 @@ static int simulate_single_site(
         *out_earth_win_count = earth_win_count;
     }
 
-    out_summary->total_sun_hours = sun_vis_steps * step_hours;
-    out_summary->illumination_percent = ((double)sun_vis_steps / total_steps) * 100.0;
-    out_summary->longest_sun_hours = max_sun_streak * step_hours;
+    out_summary->total_sun_hours = sun_vis_seconds / 3600.0;
+    out_summary->illumination_percent = (sun_vis_seconds / total_requested_seconds) * 100.0;
+    out_summary->longest_sun_hours = max_sun_seconds / 3600.0;
 
-    out_summary->total_earth_hours = earth_vis_steps * step_hours;
-    out_summary->earth_visibility_percent = ((double)earth_vis_steps / total_steps) * 100.0;
-    out_summary->longest_earth_hours = max_earth_streak * step_hours;
+    out_summary->total_earth_hours = earth_vis_seconds / 3600.0;
+    out_summary->earth_visibility_percent = (earth_vis_seconds / total_requested_seconds) * 100.0;
+    out_summary->longest_earth_hours = max_earth_seconds / 3600.0;
     out_summary->dte_window_count = earth_win_count;
 
-    out_summary->overlap_hours = overlap_steps * step_hours;
-    out_summary->longest_dark_hours = max_dark_streak * step_hours;
-    out_summary->avg_sun_elevation_deg = sun_el_sum / total_steps;
-    out_summary->avg_earth_elevation_deg = earth_el_sum / total_steps;
+    out_summary->overlap_hours = overlap_seconds / 3600.0;
+    out_summary->longest_dark_hours = max_dark_seconds / 3600.0;
+    out_summary->avg_sun_elevation_deg = sun_el_weighted_sum / total_requested_seconds;
+    out_summary->avg_earth_elevation_deg = earth_el_weighted_sum / total_requested_seconds;
 
     double illum_score = out_summary->illumination_percent * 0.50;
     double earth_score = out_summary->earth_visibility_percent * 0.30;
@@ -414,11 +421,12 @@ SimulationResult run_lunar_simulation(
         end_et = start_et + (14.0 * 86400.0);
     }
 
-    // DÜZELTME: +1 kaldırıldı; 336 saat / 1 saat = tam 336 adım
-    int total_steps = (int)floor((end_et - start_et) / (double)step_seconds);
+    double total_requested_seconds = end_et - start_et;
+    int total_steps = (int)ceil((total_requested_seconds - 1e-6) / (double)step_seconds);
     if (total_steps < 1) total_steps = 1;
     if (total_steps > MAX_SIMULATION_STEPS) {
         total_steps = MAX_SIMULATION_STEPS;
+        end_et = start_et + ((double)total_steps * (double)step_seconds);
         snprintf(res.warning_msg, sizeof(res.warning_msg),
                  "Zaman aralığı maksimum adım sınırına (%d örnek) kırpıldı.", MAX_SIMULATION_STEPS);
     }
@@ -428,7 +436,6 @@ SimulationResult run_lunar_simulation(
     double target_alt = altitude_m;
     const char *resolved_name = (site_name && strlen(site_name) > 0) ? site_name : "Custom Site";
 
-    // Yalnızca özel koordinat verilmemişse aday saha tablosundan koordinat çek
     if (!use_custom_coords) {
         for (int i = 0; i < NUM_CANDIDATE_SITES; i++) {
             if (strcasecmp(resolved_name, CANDIDATE_SITES[i].name) == 0) {
@@ -457,7 +464,7 @@ SimulationResult run_lunar_simulation(
 
     if (simulate_single_site(
             resolved_name, target_lat, target_lon, target_alt,
-            start_et, total_steps, step_seconds,
+            start_et, end_et, total_steps, step_seconds,
             use_dem_horizon, min_sun_el_deg, min_earth_el_deg, include_earth_disk,
             &res.summary, res.terrain_horizon_mask, &res.using_real_dem, res.samples,
             &res.sun_windows, &res.sun_window_count,
@@ -477,7 +484,7 @@ SimulationResult run_lunar_simulation(
     for (int i = 0; i < NUM_CANDIDATE_SITES; i++) {
         simulate_single_site(
             CANDIDATE_SITES[i].name, CANDIDATE_SITES[i].lat, CANDIDATE_SITES[i].lon, CANDIDATE_SITES[i].alt_m,
-            start_et, total_steps, step_seconds,
+            start_et, end_et, total_steps, step_seconds,
             use_dem_horizon, min_sun_el_deg, min_earth_el_deg, include_earth_disk,
             &res.comparisons[i], NULL, NULL, NULL, NULL, NULL, NULL, NULL
         );

@@ -11,6 +11,7 @@ typedef struct {
     int step_index;
     char utc[32];
     double et_seconds;
+    double duration_seconds;
     double sun_azimuth_deg;
     double sun_elevation_deg;
     double earth_azimuth_deg;

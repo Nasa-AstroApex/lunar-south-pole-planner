@@ -1,21 +1,159 @@
--- lua/main.lua - Doğrulanmış Sözleşme Orkestratörü
+-- lua/main.lua - Tam JSON Ayrıştırıcılı ve Doğrulanmış Orkestratör
 
-local function extract_json_string(json_str, key)
-    local pattern = '"' .. key .. '"%s*:%s*"([^"]*)"'
-    return string.match(json_str, pattern)
+-- =========================================================================
+-- 1. SAF LUA RECURSIVE-DESCENT JSON PARSER (Boolean ve İç İçe Nesne Korumalı)
+-- =========================================================================
+local function parse_json(str)
+    local pos = 1
+    local len = #str
+
+    local function skip_ws()
+        local _, e = str:find("^[ \t\r\n]*", pos)
+        if e then pos = e + 1 end
+    end
+
+    local parse_value
+
+    local function parse_string()
+        pos = pos + 1
+        local out = {}
+        while pos <= len do
+            local c = str:sub(pos, pos)
+            if c == '"' then
+                pos = pos + 1
+                return table.concat(out)
+            elseif c == '\\' then
+                local nxt = str:sub(pos + 1, pos + 1)
+                local escapes = {
+                    ['"'] = '"', ['\\'] = '\\', ['/'] = '/',
+                    b = '\b', f = '\f', n = '\n', r = '\r', t = '\t'
+                }
+                out[#out + 1] = escapes[nxt] or nxt
+                pos = pos + 2
+            else
+                out[#out + 1] = c
+                pos = pos + 1
+            end
+        end
+        error("Sonlandırılmamış JSON string")
+    end
+
+    local function parse_number()
+        local s, e = str:find("^-?%d+%.?%d*[eE]?[+-]?%d*", pos)
+        if not s then error("Geçersiz sayı konumu: " .. pos) end
+        pos = e + 1
+        return tonumber(str:sub(s, e))
+    end
+
+    local function parse_array()
+        pos = pos + 1
+        local arr = {}
+        skip_ws()
+        if str:sub(pos, pos) == ']' then
+            pos = pos + 1
+            return arr
+        end
+        while pos <= len do
+            skip_ws()
+            arr[#arr + 1] = parse_value()
+            skip_ws()
+            local c = str:sub(pos, pos)
+            if c == ']' then
+                pos = pos + 1
+                return arr
+            elseif c == ',' then
+                pos = pos + 1
+            else
+                error("Dizi içinde ',' veya ']' beklendi")
+            end
+        end
+        error("Sonlandırılmamış JSON dizisi")
+    end
+
+    local function parse_object()
+        pos = pos + 1
+        local obj = {}
+        skip_ws()
+        if str:sub(pos, pos) == '}' then
+            pos = pos + 1
+            return obj
+        end
+        while pos <= len do
+            skip_ws()
+            if str:sub(pos, pos) ~= '"' then
+                error("Nesne anahtarı string olmalı")
+            end
+            local key = parse_string()
+            skip_ws()
+            if str:sub(pos, pos) ~= ':' then
+                error("':' beklendi")
+            end
+            pos = pos + 1
+            skip_ws()
+            obj[key] = parse_value()
+            skip_ws()
+            local c = str:sub(pos, pos)
+            if c == '}' then
+                pos = pos + 1
+                return obj
+            elseif c == ',' then
+                pos = pos + 1
+            else
+                error("Nesne içinde ',' veya '}' beklendi")
+            end
+        end
+        error("Sonlandırılmamış JSON nesnesi")
+    end
+
+    parse_value = function()
+        skip_ws()
+        local c = str:sub(pos, pos)
+        if c == '"' then
+            return parse_string()
+        elseif c == '{' then
+            return parse_object()
+        elseif c == '[' then
+            return parse_array()
+        elseif c == 't' and str:sub(pos, pos + 3) == "true" then
+            pos = pos + 4
+            return true
+        elseif c == 'f' and str:sub(pos, pos + 4) == "false" then
+            pos = pos + 5
+            return false
+        elseif c == 'n' and str:sub(pos, pos + 3) == "null" then
+            pos = pos + 4
+            return nil
+        else
+            return parse_number()
+        end
+    end
+
+    local res = parse_value()
+    skip_ws()
+    if pos <= len then
+        error("JSON sonunda beklenmeyen karakterler")
+    end
+    return res
 end
 
-local function extract_json_number(json_str, key)
-    local pattern = '"' .. key .. '"%s*:%s*([%-0-9%.]+)'
-    local val = string.match(json_str, pattern)
-    return val and tonumber(val) or nil
+-- Açık 'false' ve '0' değerlerini koruyan seçim yardımcıları
+local function pick_value(...)
+    for i = 1, select("#", ...) do
+        local v = select(i, ...)
+        if v ~= nil then
+            return v
+        end
+    end
+    return nil
 end
 
-local function extract_json_bool(json_str, key)
-    local pattern = '"' .. key .. '"%s*:%s*(true|false)'
-    local val = string.match(json_str, pattern)
-    if val == "true" then return true end
-    if val == "false" then return false end
+local function pick_bool(...)
+    for i = 1, select("#", ...) do
+        local v = select(i, ...)
+        if type(v) == "boolean" then
+            return v
+        end
+    end
     return nil
 end
 
@@ -23,6 +161,47 @@ local function json_escape(s)
     return tostring(s):gsub('\\', '\\\\'):gsub('"', '\\"'):gsub('\n', '\\n')
 end
 
+-- =========================================================================
+-- 2. ATOMİK / DOĞRULAMALI DOSYA YAZICI (open + write + close kontrolü)
+-- =========================================================================
+local function resolve_output_path()
+    local probe_root = io.open("lua/main.lua", "r")
+    if probe_root then
+        probe_root:close()
+        return "data/output.json"
+    end
+    local probe_sub = io.open("../lua/main.lua", "r")
+    if probe_sub then
+        probe_sub:close()
+        return "../data/output.json"
+    end
+    return "data/output.json"
+end
+
+local function write_output_file(content)
+    local path = resolve_output_path()
+    local f, open_err = io.open(path, "wb")
+    if not f then
+        return false, path, tostring(open_err or "dosya açılamadı")
+    end
+
+    local ok_write, write_err = f:write(content)
+    if not ok_write then
+        f:close()
+        return false, path, tostring(write_err or "yazma hatası")
+    end
+
+    local ok_close, close_err = f:close()
+    if not ok_close then
+        return false, path, tostring(close_err or "kapatma/flush hatası")
+    end
+
+    return true, path, nil
+end
+
+-- =========================================================================
+-- 3. JSON SÖZLEŞME OLUŞTURUCU
+-- =========================================================================
 local function serialize_windows(win_list)
     local items = {}
     for i = 1, #win_list do
@@ -100,8 +279,8 @@ local function build_contract_json(c_res, req)
         local t = c_res.samples[i]
         local comma = (i < count) and "," or ""
         add(string.format(
-            '    {"step_index": %d, "utc": "%s", "sun_azimuth_deg": %.2f, "sun_elevation_deg": %.2f, "earth_azimuth_deg": %.2f, "earth_elevation_deg": %.2f, "sun_terrain_horizon_deg": %.2f, "earth_terrain_horizon_deg": %.2f, "is_sun_visible": %s, "is_earth_visible": %s}%s\n',
-            t.step_index, json_escape(t.utc),
+            '    {"step_index": %d, "utc": "%s", "duration_seconds": %.1f, "sun_azimuth_deg": %.2f, "sun_elevation_deg": %.2f, "earth_azimuth_deg": %.2f, "earth_elevation_deg": %.2f, "sun_terrain_horizon_deg": %.2f, "earth_terrain_horizon_deg": %.2f, "is_sun_visible": %s, "is_earth_visible": %s}%s\n',
+            t.step_index, json_escape(t.utc), t.duration_seconds,
             t.sun_azimuth_deg, t.sun_elevation_deg,
             t.earth_azimuth_deg, t.earth_elevation_deg,
             t.sun_terrain_horizon_deg, t.earth_terrain_horizon_deg,
@@ -129,39 +308,59 @@ local function build_contract_json(c_res, req)
     return table.concat(buf)
 end
 
+-- =========================================================================
+-- 4. ANA GİRİŞ NOKTASI
+-- =========================================================================
 function handle_simulation_json(raw_json_input)
-    local input = raw_json_input or "{}"
+    local input = (raw_json_input and #raw_json_input > 0) and raw_json_input or "{}"
 
-    local in_lat  = extract_json_number(input, "latitude_deg") or extract_json_number(input, "latitude")
-    local in_lon  = extract_json_number(input, "longitude_deg") or extract_json_number(input, "longitude")
-    local in_alt  = extract_json_number(input, "altitude_m") or extract_json_number(input, "altitude")
-    local in_name = extract_json_string(input, "site_name") or extract_json_string(input, "name")
-    local in_cust = extract_json_bool(input, "use_custom")
+    local ok_parse, decoded = pcall(parse_json, input)
+    if not ok_parse or type(decoded) ~= "table" then
+        return string.format('{"status":"ERROR","message":"Geçersiz JSON isteği: %s"}', json_escape(tostring(decoded)))
+    end
 
-    -- Kullanıcı açıkça koordinat gönderdiyse use_custom otomatik true olur
+    local site = (type(decoded.site) == "table") and decoded.site or {}
+    local tr   = (type(decoded.time_range) == "table") and decoded.time_range or {}
+    local opts = (type(decoded.options) == "table") and decoded.options or {}
+
+    local in_lat  = pick_value(site.latitude_deg, site.latitude, decoded.latitude_deg, decoded.latitude)
+    local in_lon  = pick_value(site.longitude_deg, site.longitude, decoded.longitude_deg, decoded.longitude)
+    local in_alt  = pick_value(site.altitude_m, site.altitude, decoded.altitude_m, decoded.altitude)
+    local in_name = pick_value(site.site_name, site.name, decoded.site_name, decoded.name)
+
+    -- Açık boolean değeri (false dahil) koru
+    local explicit_use_custom = pick_bool(site.use_custom, decoded.use_custom)
     local has_explicit_coords = (in_lat ~= nil or in_lon ~= nil)
-    local use_custom = (in_cust ~= nil) and in_cust or has_explicit_coords
+    local use_custom
+    if explicit_use_custom ~= nil then
+        use_custom = explicit_use_custom
+    else
+        use_custom = has_explicit_coords
+    end
 
-    local start_utc = extract_json_string(input, "start_utc") or extract_json_string(input, "start_date") or "2026-10-18T00:00:00"
-    local end_utc   = extract_json_string(input, "end_utc") or extract_json_string(input, "end_date") or "2026-11-01T00:00:00"
-    local step_sec  = extract_json_number(input, "step_seconds") or extract_json_number(input, "interval_seconds") or 3600
+    local use_dem_horizon = pick_bool(opts.use_dem_horizon, decoded.use_dem_horizon)
+    if use_dem_horizon == nil then use_dem_horizon = true end
 
-    local use_dem   = extract_json_bool(input, "use_dem_horizon")
-    if use_dem == nil then use_dem = true end
+    local include_earth_disk = pick_bool(opts.include_earth_disk, decoded.include_earth_disk)
+    if include_earth_disk == nil then include_earth_disk = false end
+
+    local start_utc = pick_value(tr.start_utc, tr.start_date, decoded.start_utc, decoded.start_date) or "2026-10-18T00:00:00"
+    local end_utc   = pick_value(tr.end_utc, tr.end_date, decoded.end_utc, decoded.end_date) or "2026-11-01T00:00:00"
+    local step_sec  = pick_value(tr.step_seconds, tr.interval_seconds, decoded.step_seconds, decoded.interval_seconds) or 3600
 
     local req = {
-        site_name               = in_name or (has_explicit_coords and "Custom Coordinate" or "Shackleton Rim"),
+        site_name               = in_name or (use_custom and "Custom Coordinate" or "Shackleton Rim"),
         latitude_deg            = in_lat or -89.90,
         longitude_deg           = in_lon or 0.00,
         altitude_m              = in_alt or 0.0,
         use_custom              = use_custom,
-        start_utc               = start_utc:gsub("Z$", ""),
-        end_utc                 = end_utc:gsub("Z$", ""),
-        step_seconds            = step_sec,
-        use_dem_horizon         = use_dem,
-        min_sun_elevation_deg   = extract_json_number(input, "min_sun_elevation_deg") or 0.0,
-        min_earth_elevation_deg = extract_json_number(input, "min_earth_elevation_deg") or 0.0,
-        include_earth_disk      = extract_json_bool(input, "include_earth_disk") or false
+        start_utc               = tostring(start_utc):gsub("Z$", ""),
+        end_utc                 = tostring(end_utc):gsub("Z$", ""),
+        step_seconds            = tonumber(step_sec) or 3600,
+        use_dem_horizon         = use_dem_horizon,
+        min_sun_elevation_deg   = tonumber(pick_value(opts.min_sun_elevation_deg, decoded.min_sun_elevation_deg)) or 0.0,
+        min_earth_elevation_deg = tonumber(pick_value(opts.min_earth_elevation_deg, decoded.min_earth_elevation_deg)) or 0.0,
+        include_earth_disk      = include_earth_disk
     }
 
     local c_result = nasa_compute_c(req)
@@ -172,10 +371,10 @@ function handle_simulation_json(raw_json_input)
 
     local final_json = build_contract_json(c_result, req)
 
-    local out_file = io.open("data/output.json", "w") or io.open("../data/output.json", "w")
-    if out_file then
-        out_file:write(final_json)
-        out_file:close()
+    local ok_save, saved_path, save_err = write_output_file(final_json)
+    if not ok_save then
+        return string.format('{"status":"ERROR","message":"Çıktı dosyası yazılamadı (%s): %s"}',
+            json_escape(saved_path), json_escape(save_err))
     end
 
     return final_json
