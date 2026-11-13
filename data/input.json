@@ -1,0 +1,20 @@
+{
+  "site": {
+    "site_name": "Shackleton Rim",
+    "latitude_deg": -89.90,
+    "longitude_deg": 0.0,
+    "altitude_m": 120,
+    "use_custom": false
+  },
+  "time_range": {
+    "start_utc": "2026-10-18T00:00:00Z",
+    "end_utc": "2026-11-01T00:00:00Z",
+    "step_seconds": 3600
+  },
+  "options": {
+    "use_dem_horizon": true,
+    "min_sun_elevation_deg": 0.0,
+    "min_earth_elevation_deg": 0.0,
+    "include_earth_disk": false
+  }
+}

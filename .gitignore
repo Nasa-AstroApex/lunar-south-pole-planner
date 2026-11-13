@@ -1,0 +1,11 @@
+MissionPlanner
+cspice_test
+*.o
+*.out
+*.exe
+cspice/
+venv/
+__pycache__/
+*.pyc
+data/*.bin
+.DS_Store

@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lunar South Pole | Mission Planner</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <a class="brand" href="#overview">
+      <span class="brand-icon">◒</span>
+      <span>LUNAR<span class="brand-light"> / MISSION PLANNER</span>
+        <small>SOUTH POLE OPERATIONS</small>
+      </span>
+    </a>
+
+    <div class="menu-label">MISSION CONSOLE</div>
+    <nav class="side-nav" aria-label="Ana menü">
+      <button class="side-link active" data-page="overview"><span>◫</span> Genel görünüm</button>
+      <button class="side-link" data-page="timeline"><span>◷</span> Zaman simülasyonu</button>
+      <button class="side-link" data-page="compare"><span>⌖</span> Saha karşılaştırma</button>
+      <button class="side-link" data-page="method"><span>ⓘ</span> Model ve varsayımlar</button>
+    </nav>
+
+    <div class="sidebar-bottom">
+      <span class="online-dot"></span> LOCAL PLANNING MODE
+      <small>Concept interface · v0.2</small>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="crumb">MISSION PLANNING <span>/</span> LUNAR SOUTH POLE</div>
+      <div class="top-right">
+        <span class="mode-chip">CONCEPT MODEL</span>
+        <span class="avatar">LP</span>
+      </div>
+    </header>
+
+    <section class="page active" id="overview">
+      <div class="page-title">
+        <div>
+          <p class="eyebrow">MISSION OVERVIEW</p>
+          <h1>South Pole Site Planner</h1>
+          <p class="lead">Aydınlanma ve Dünya görüş pencerelerini tek ekranda inceleyin.</p>
+        </div>
+        <span class="model-note">DEMO MODEL · gerçek efemeris verisi bağlı değil</span>
+      </div>
+
+      <section class="filters panel">
+        <label class="field">
+          <span>İNİŞ SAHASI</span>
+          <select id="site">
+            <option>Shackleton Rim</option>
+            <option>Connecting Ridge</option>
+            <option>Malapert Massif</option>
+            <option>Güney Ay (örnek)</option>
+            <option>Doğu Ay (örnek)</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>BAŞLANGIÇ TARİHİ</span>
+          <input id="date" type="date" value="2026-10-18">
+        </label>
+
+        <label class="field">
+          <span>GÖREV SÜRESİ</span>
+          <select id="duration">
+            <option value="7">7 gün</option>
+            <option value="14" selected>14 gün</option>
+            <option value="21">21 gün</option>
+            <option value="28">28 gün</option>
+          </select>
+        </label>
+
+        <button class="primary" id="compareBtn" type="button">
+          Sahaları karşılaştır <b>→</b>
+        </button>
+      </section>
+
+      <div class="overview-grid">
+        <section class="panel visual-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">LOCAL HORIZON</p>
+              <h2>Yerel ufuk görünümü</h2>
+            </div>
+            <span class="site-pill" id="skySite">SHACKLETON RIM</span>
+          </div>
+
+          <p class="muted">Gök cisimlerinin gözlem noktasına göre şematik konumu</p>
+
+          <div class="sky" role="img" aria-label="Ay ufkuna göre Güneş ve Dünya konumları">
+            <div class="starfield"></div>
+            <div class="moon-ridge"><span class="ridge-shadow"></span></div>
+            <div class="horizon"><span>LOCAL HORIZON</span></div>
+
+            <div class="sun-wrap" id="sunObject">
+              <div class="sun-halo"></div>
+              <div class="sun-disc"></div>
+              <label>GÜNEŞ <b id="sunAngle">+08°</b></label>
+            </div>
+
+            <div class="earth-wrap" id="earthObject">
+              <svg class="earth" viewBox="0 0 100 100" aria-label="Dünya">
+                <defs>
+                  <radialGradient id="earthOcean" cx="32%" cy="28%">
+                    <stop offset="0" stop-color="#78c8ee"/>
+                    <stop offset=".55" stop-color="#2579ad"/>
+                    <stop offset="1" stop-color="#09233d"/>
+                  </radialGradient>
+                  <clipPath id="earthClip"><circle cx="50" cy="50" r="48"/></clipPath>
+                </defs>
+                <circle cx="50" cy="50" r="48" fill="url(#earthOcean)" stroke="#b8e6ff" stroke-width="2"/>
+                <g clip-path="url(#earthClip)" fill="#8fb982">
+                  <path d="M19 25l9-8 13 2 5 8-8 7-2 9-8 1-4 10-8-3-3-12-7-6 4-7zM48 49l10 2 8 8-3 12-7 10-5-5-5-14zM66 20l7-8 13 4 6 9-7 7-11-3zM76 54l10-4 11 6-4 11-10 3-7-7z"/>
+                </g>
+                <path d="M11 38c10-26 31-39 54-36" fill="none" stroke="#fff" stroke-opacity=".35" stroke-width="5"/>
+              </svg>
+              <label>DÜNYA <b id="earthAngle">+14°</b></label>
+            </div>
+
+            <div class="cardinal">S <span>↑</span></div>
+            <div class="sky-scale"><span>+90°</span><i></i><span>0° UFUK</span></div>
+          </div>
+
+          <div class="visual-legend">
+            <span><i class="sun-key"></i>Güneş</span>
+            <span><i class="earth-key"></i>Dünya</span>
+            <span><i class="ridge-key"></i>Arazi ufku</span>
+          </div>
+        </section>
+
+        <section class="panel metrics-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">MISSION CONDITIONS</p>
+              <h2>Görev koşulları</h2>
+            </div>
+            <span class="date-display" id="dateLabel">18 Eki 2026</span>
+          </div>
+
+          <div class="metric-grid">
+            <article class="metric">
+              <span>AYDINLANMA SÜRESİ</span>
+              <strong id="illum">64%</strong>
+              <small>Görev aralığı payı</small>
+            </article>
+            <article class="metric">
+              <span>DTE GÖRÜŞ PENCERESİ</span>
+              <strong><b id="windows">2</b><em> aralık</em></strong>
+              <small>Geometrik görüş varsayımı</small>
+            </article>
+            <article class="metric">
+              <span>AYDINLIK + DTE ÇAKIŞMASI</span>
+              <strong id="overlap">18 sa</strong>
+              <small>Eşzamanlı örnek süre</small>
+            </article>
+            <article class="metric">
+              <span>EN UZUN KARANLIK</span>
+              <strong id="darkGap">11 sa</strong>
+              <small>Kesintisiz örnek dönem</small>
+            </article>
+          </div>
+
+          <div class="alert-box" id="missionAlert">
+            <span class="alert-icon">!</span>
+            <span>
+              <b>Görev penceresi kontrolü</b>
+              <small id="alertText">Zaman aralığı için örnek koşullar hesaplanıyor.</small>
+            </span>
+          </div>
+        </section>
+      </div>
+
+      <div class="lower-grid">
+        <section class="panel chart-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">MISSION WINDOW</p>
+              <h2 id="timelineTitle">14 günlük zaman çizelgesi</h2>
+            </div>
+            <button class="text-button" data-page="timeline">Ayrıntı <b>→</b></button>
+          </div>
+          <div class="chart-axis" id="timelineAxis"></div>
+          <div id="timelineRows" class="chart-rows"></div>
+          <div class="chart-legend">
+            <span><i class="sun-key"></i>Güneş ışığı</span>
+            <span><i class="earth-key"></i>Dünya görüşü</span>
+            <span><i class="overlap-key"></i>Çakışma</span>
+          </div>
+        </section>
+
+        <section class="panel settings-panel">
+          <div class="panel-head">
+            <div><p class="eyebrow">SURFACE PROFILE</p><h2>Arazi ufku</h2></div>
+            <span class="value-chip"><b id="terrainValue">6</b>°</span>
+          </div>
+          <p class="muted">Ufuk üzerindeki örnek arazi engelini ayarla.</p>
+          <label class="range-label" for="terrain">
+            Engel yüksekliği <span id="terrainCaption">6°</span>
+          </label>
+          <input id="terrain" type="range" min="0" max="20" value="6">
+          <p class="micro-note">Ayarlanabilir örnek maske · sayısal arazi modeli bağlı değil.</p>
+        </section>
+      </div>
+    </section>
+
+    <section class="page" id="timeline" hidden>
+      <div class="page-title">
+        <div>
+          <p class="eyebrow">TIME SIMULATION</p>
+          <h1>Zaman simülasyonu</h1>
+          <p class="lead">Seçilen görev aralığında gökyüzü görünümünü ilerletin.</p>
+        </div>
+      </div>
+
+      <section class="panel sim-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">CURRENT SIMULATION TIME</p>
+            <h2 id="simDate">18 Eki 2026 · Görev günü 1</h2>
+          </div>
+          <button class="primary" id="playBtn" type="button">▶ Başlat</button>
+        </div>
+
+        <div class="sky sim-sky">
+          <div class="starfield"></div>
+          <div class="moon-ridge"><span class="ridge-shadow"></span></div>
+          <div class="horizon"><span>LOCAL HORIZON</span></div>
+
+          <div class="sun-wrap" id="simSun">
+            <div class="sun-halo"></div><div class="sun-disc"></div>
+            <label>GÜNEŞ <b id="simSunAngle">+08°</b></label>
+          </div>
+
+          <div class="earth-wrap" id="simEarth">
+            <svg class="earth" viewBox="0 0 100 100">
+              <circle cx="50" cy="50" r="48" fill="#267eae" stroke="#b8e6ff" stroke-width="2"/>
+              <path d="M19 25l20-8 10 8-8 12-8 2-5 15-10-5-5-15zM55 50l12 8-5 16-8 8-7-17zM72 18l17 7-8 10-13-5z" fill="#8fb982"/>
+            </svg>
+            <label>DÜNYA <b id="simEarthAngle">+14°</b></label>
+          </div>
+
+          <div class="horizon-mask" id="horizonMask"></div>
+        </div>
+
+        <div class="scrubber-head">
+          <span>GÖREV ZAMAN ÇİZELGESİ</span>
+          <strong id="timeReadout">00:00 UTC</strong>
+        </div>
+        <input id="timeSlider" type="range" min="0" max="100" value="0">
+        <div class="slider-labels">
+          <span>Başlangıç</span><span id="durationLabel">14 gün</span><span>Bitiş</span>
+        </div>
+      </section>
+
+      <div class="sim-info-grid">
+        <section class="panel">
+          <p class="eyebrow">ANLIK GÖRÜŞ</p>
+          <h2 id="instantStatus">Güneş ve Dünya görünür</h2>
+          <p class="muted" id="instantDetail">Görüş ve arazi engeli için örnek durum.</p>
+        </section>
+        <section class="panel">
+          <p class="eyebrow">GÜNEŞ PANELİ GÜÇ TAHMİNİ</p>
+          <label class="field inline-field">
+            <span>Panel gücü (W)</span>
+            <input id="panelWatts" type="number" min="50" max="2000" value="500">
+          </label>
+          <div class="power-result">
+            <strong id="powerEstimate">—</strong>
+            <span>Wh / seçili dönem (yaklaşık)</span>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section class="page" id="compare" hidden>
+      <div class="page-title">
+        <div>
+          <p class="eyebrow">SITE COMPARISON</p>
+          <h1>Aday sahaları karşılaştırın</h1>
+          <p class="lead">Aynı tarih ve görev süresi için saha profillerini yan yana inceleyin.</p>
+        </div>
+      </div>
+
+      <section class="filters panel compact-filters">
+        <label class="field">
+          <span>BAŞLANGIÇ TARİHİ</span>
+          <input id="compareDate" type="date" value="2026-10-18">
+        </label>
+        <label class="field">
+          <span>GÖREV SÜRESİ</span>
+          <select id="compareDuration">
+            <option value="7">7 gün</option>
+            <option value="14" selected>14 gün</option>
+            <option value="21">21 gün</option>
+            <option value="28">28 gün</option>
+          </select>
+        </label>
+        <button class="secondary" data-page="overview">← Genel görünüme dön</button>
+      </section>
+
+      <section class="panel table-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">SITE PERFORMANCE</p>
+            <h2 id="compareHeading">14 günlük saha özeti</h2>
+          </div>
+          <span class="model-note">Model önizlemesi</span>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ADAY SAHA</th><th>AYDINLANMA</th><th>DTE PENCERESİ</th>
+                <th>ÇAKIŞMA</th><th>EN UZUN KARANLIK</th><th>GÖSTERGE</th>
+              </tr>
+            </thead>
+            <tbody id="comparisonRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel note-panel">
+        <p class="eyebrow">KULLANIM NOTU</p>
+        <p>Bu arayüz konsept ve eğitim amaçlıdır. Sonuçlar örnek modelden gelir; gerçek görev analizi için efemeris ve bölgesel arazi verisi bağlanmalıdır.</p>
+      </section>
+    </section>
+
+    <section class="page" id="method" hidden>
+      <div class="page-title">
+        <div>
+          <p class="eyebrow">MODEL & ASSUMPTIONS</p>
+          <h1>Model ve varsayımlar</h1>
+          <p class="lead">Sonuçların hangi kabullerle üretildiğini görün.</p>
+        </div>
+      </div>
+
+      <div class="method-grid">
+        <article class="panel">
+          <span class="method-number">01</span>
+          <h2>Gökyüzü geometrisi</h2>
+          <p>Güneş ve Dünya işaretçileri ufka göre şematik yerleştirilir. Gerçek yükseklik ve azimut için efemeris girdisi gerekir.</p>
+        </article>
+        <article class="panel">
+          <span class="method-number">02</span>
+          <h2>Enerji penceresi</h2>
+          <p>Aydınlanma oranı ve panel gücü girişiyle yaklaşık Wh gösterilir. Panel yönelimi, verim ve gölgelenme modele eklenmelidir.</p>
+        </article>
+        <article class="panel">
+          <span class="method-number">03</span>
+          <h2>DTE görüşü</h2>
+          <p>Dünya'nın ufuk üstünde olması geometrik görüş varsayımıdır; RF bağlantısı, anten, arazi ve bağlantı bütçesi ayrıca değerlendirilir.</p>
+        </article>
+      </div>
+    </section>
+
+    <footer class="footer">
+      LUNAR SOUTH POLE PLANNER <span>·</span> CONCEPT INTERFACE
+      <span class="footer-right">MODEL DURUMU: DEMO</span>
+    </footer>
+  </main>
+</div>
+<script src="script.js"></script>
+</body>
+</html>
