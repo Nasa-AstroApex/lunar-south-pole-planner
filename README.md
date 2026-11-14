@@ -80,7 +80,7 @@ Beklenen örnek çıktı:
 
 ```text
 [3B SPICE UNIVERSE] 13 Gok Cismi | Yörünge Hızı: 1.629 km/s | ...
-[C11 SUPER-CORE] Connecting Ridge (-89.45, -137.50) | ... | Karar: CAUTION (69/100)
+[C11 SUPER-CORE] Connecting Ridge (-89.46, -137.49) | ... | Karar: <GO|CAUTION|NO-GO> (<skor>/100)
 ```
 
 ### HTTP sunucusu
@@ -144,6 +144,31 @@ güncellenir. Bu farkı frontend'te fizik yazarak kapatmayın.
 - UTC metinleri backend'den geldiği gibi gösterilir; frontend'te yeniden hesaplanmaz.
 - `data/output.json`, `data/3b_scene.json`, `data/3b_scene.js` **üretilen** dosyalardır.
   Elle düzenlenmez; `./build/lunar_sim --once` ile yeniden üretilir.
+
+## Veri Kaynakları ve Doğruluk
+
+Çıktıdaki her sayının nereden geldiği JSON içinde açıkça işaretlenir; sunumda bunları olduğu gibi aktarın.
+
+| Konu | Kaynak | JSON işareti |
+|---|---|---|
+| Güneş/Dünya konumu (CSPICE kuruluysa) | NASA NAIF CSPICE, `de440s.bsp` + `pck00010.tpc`, `IAU_MOON` çerçevesi, `LT+S` | `meta.ephemeris_source = "CSPICE_DE440S_IAU_MOON"` |
+| Güneş/Dünya konumu (CSPICE yoksa) | Meeus *Astronomical Algorithms* analitik serisi; tarihe bağlıdır, JPL Horizons ile doğrulanmış değerlerden sapma ~0,03° | `meta.ephemeris_source = "ANALYTIC_MEEUS_FALLBACK"` |
+| Ufuk maskesi: Shackleton Rim, Connecting Ridge, Malapert Massif merkezleri | Gerçek LOLA 80 m DEM ufuk profili (Barker ve ark. 2023, NASA GSFC PGDA ürün 90), `src/lola_horizons.h` | `meta.dem_info.horizon_source = "LOLA_80M_SKYLINE"` |
+| Ufuk maskesi: diğer tüm noktalar | **Sentetik** analitik arazi (gerçek DEM değildir) | `meta.dem_info.horizon_source = "SYNTHETIC_ANALYTIC"` |
+| Eğim, rover rotası, "buz" hedefi | Her zaman **sentetik** arazi | `meta.dem_info.terrain_is_synthetic = true` |
+| Sıcaklık, buz olasılığı, batarya (SoC) | Basitleştirilmiş sezgisel formüller; ölçüm veya doğrulanmış model değildir | — |
+| 3B iniş yörüngesi | Kütle/yakıt modeli olmayan kinematik görselleştirme; `touchdown_speed_ms` tasarım hedefidir | `touchdown_report.guidance_model` |
+
+Açılar toposentriktir (yüzeydeki gözlemciden); Dünya için Ay yarıçapı kaynaklı ~0,27° paralaks hesaba katılır.
+Saha merkezleri NASA Lunar Surface Data Book Tablo A2-2 (NTRS 20230007818) değerleridir.
+
+### CSPICE kurulumu
+
+`cspice/` klasörü depoda yoktur (`.gitignore`). Gerçek SPICE efemerisi için NAIF'in CSPICE paketini
+<https://naif.jpl.nasa.gov/naif/toolkit_C.html> adresinden indirip depo köküne `cspice/` olarak açın
+(`cspice/include/SpiceUsr.h` ve `cspice/lib/cspice.a` bulunmalı), sonra `make clean && make` çalıştırın.
+Kernel'ler `data/kernels/` klasöründen otomatik yüklenir. CSPICE yoksa motor yine çalışır, ancak analitik
+yedeğe düşer ve bunu `ephemeris_source` alanında bildirir.
 
 ## Frontend Kuralları
 

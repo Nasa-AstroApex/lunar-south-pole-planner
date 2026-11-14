@@ -94,6 +94,15 @@ export interface SimulationMetadata {
   dem_out_of_bounds?: boolean;
   dem_source?: string;
   warning?: string;
+  /** "CSPICE_DE440S_IAU_MOON" veya "ANALYTIC_MEEUS_FALLBACK". Yedek kullanılıyorsa UI'da belirt. */
+  ephemeris_source?: string;
+  dem_info?: {
+    name?: string;
+    /** "LOLA_80M_SKYLINE" (gerçek veri) veya "SYNTHETIC_ANALYTIC" (sentetik arazi). */
+    horizon_source?: string;
+    /** Eğim ve rover rotası her zaman sentetik araziden gelir. */
+    terrain_is_synthetic?: boolean;
+  };
 }
 
 export interface SiteComparison {
@@ -110,6 +119,7 @@ export interface SiteComparison {
   total_sun_hours?: number;
   longest_sun_hours?: number;
   earth_visibility_percent?: number;
+  slope_deg?: number;
   longest_earth_hours?: number;
   dte_window_count?: number;
   altitude_m?: number;
@@ -201,9 +211,9 @@ export const CANDIDATE_LANDING_SITES: Array<{
   longitude_deg: number;
   altitude_m: number;
 }> = [
-  { name: "Shackleton Rim", latitude_deg: -89.9, longitude_deg: 0.0, altitude_m: 120 },
-  { name: "Connecting Ridge", latitude_deg: -89.45, longitude_deg: 222.5, altitude_m: 1850 },
-  { name: "Malapert Massif", latitude_deg: -85.95, longitude_deg: 357.5, altitude_m: 4800 },
+  { name: "Shackleton Rim", latitude_deg: -89.7668, longitude_deg: -171.87, altitude_m: 770.5 },
+  { name: "Connecting Ridge", latitude_deg: -89.4632, longitude_deg: -137.49, altitude_m: 1943.3 },
+  { name: "Malapert Massif", latitude_deg: -85.9948, longitude_deg: -0.23578, altitude_m: 4784.8 },
   { name: "Nobile Rim 1", latitude_deg: -85.2, longitude_deg: 55.0, altitude_m: 2100 },
   { name: "Haworth", latitude_deg: -87.45, longitude_deg: 354.8, altitude_m: 1650 },
 ];

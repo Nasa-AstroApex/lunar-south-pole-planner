@@ -57,17 +57,37 @@ static void run_lua_ranking_layer(void) {
 #endif
 }
 
+static int hex_val(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* Sorgu dizgisinden TAM anahtar eslesmesiyle deger okur ve URL kodlamasini (%XX, +) cozer.
+   Eski surum strstr kullandigi icin "lat" anahtari "sc_lat" icinde de eslesiyordu. */
 static void parse_query_param(const char *query, const char *key, char *dst, size_t dst_sz) {
-    const char *p = strstr(query, key);
-    if (!p) return;
-    p += strlen(key);
-    if (*p == '=') p++;
-    size_t i = 0;
-    while (*p && *p != '&' && *p != ' ' && i + 1 < dst_sz) {
-        dst[i++] = (*p == '+') ? ' ' : *p;
-        p++;
+    size_t klen = strlen(key);
+    const char *p = query;
+    while (p && *p && *p != ' ') {
+        if (strncmp(p, key, klen) == 0 && p[klen] == '=') {
+            p += klen + 1;
+            size_t i = 0;
+            while (*p && *p != '&' && *p != ' ' && *p != '#' && i + 1 < dst_sz) {
+                if (*p == '%' && hex_val(p[1]) >= 0 && hex_val(p[2]) >= 0) {
+                    dst[i++] = (char)(hex_val(p[1]) * 16 + hex_val(p[2]));
+                    p += 3;
+                } else {
+                    dst[i++] = (*p == '+') ? ' ' : *p;
+                    p++;
+                }
+            }
+            dst[i] = '\0';
+            return;
+        }
+        while (*p && *p != '&' && *p != ' ') p++;
+        if (*p == '&') p++;
     }
-    dst[i] = '\0';
 }
 
 static void send_file_response(int client, const char *filepath) {
@@ -107,7 +127,7 @@ static void run_http_server(int port) {
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);   /* yalnizca yerel makine */
     addr.sin_port = htons((uint16_t)port);
 
     if (bind(server_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
@@ -127,8 +147,8 @@ static void run_http_server(int port) {
         if (r > 0) {
             bool is_3b = (strncmp(req, "GET /3b", 7) == 0);
             char site[64] = "Connecting Ridge";
-            char lat_s[32] = "-89.45";
-            char lon_s[32] = "-137.50";
+            char lat_s[32] = "-89.4632";
+            char lon_s[32] = "-137.49";
             char days_s[16] = "14";
             char utc[32] = "2026-10-29T14:30:00";
             char scen_s[16] = "3";
@@ -192,7 +212,7 @@ static void run_http_server(int port) {
 
 int main(int argc, char **argv) {
     ensure_data_dir();
-    init_spice_engine("kernels/meta_kernel.tm");
+    init_spice_engine("data/kernels/meta_kernel.tm");
 
     if (argc >= 2 && strcmp(argv[1], "--serve") == 0) {
         int port = (argc >= 3) ? atoi(argv[2]) : 8080;
@@ -206,8 +226,8 @@ int main(int argc, char **argv) {
     }
 
     const char *site = (argc > arg_idx)     ? argv[arg_idx]           : "Connecting Ridge";
-    double lat       = (argc > arg_idx + 1) ? atof(argv[arg_idx + 1]) : -89.45;
-    double lon       = (argc > arg_idx + 2) ? atof(argv[arg_idx + 2]) : -137.50;
+    double lat       = (argc > arg_idx + 1) ? atof(argv[arg_idx + 1]) : -89.4632;
+    double lon       = (argc > arg_idx + 2) ? atof(argv[arg_idx + 2]) : -137.49;
     const char *utc  = (argc > arg_idx + 3) ? argv[arg_idx + 3]       : "2026-10-29T14:30:00";
     int days         = (argc > arg_idx + 4) ? atoi(argv[arg_idx + 4]) : 14;
 

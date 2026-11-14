@@ -1,4 +1,5 @@
 MissionPlanner
+src/build/
 cspice_test
 *.o
 *.out

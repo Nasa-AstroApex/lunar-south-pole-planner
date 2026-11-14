@@ -34,6 +34,7 @@ typedef struct {
     double altitude_m;
     double slope_deg;
     double illumination_percent;
+    double earth_visibility_percent;
     double total_earth_hours;
     double overlap_hours;
     double longest_dark_hours;
@@ -52,6 +53,8 @@ typedef struct {
     int duration_days;
     bool dem_out_of_bounds;
     char dem_name[64];
+    char horizon_source[32];      // "LOLA_80M_SKYLINE" veya "SYNTHETIC_ANALYTIC"
+    bool ephemeris_from_spice;    // false ise analitik (Meeus) yedek efemeris kullanildi
     char warning_msg[192];
 
     // 2. Temel Fizik & Arazi Metrikleri
@@ -134,7 +137,16 @@ typedef struct {
 } SimulationResult;
 
 bool init_spice_engine(const char *meta_kernel_path);
+/* DIKKAT: Adina ragmen bu fonksiyon gercek LOLA verisi OKUMAZ; sentetik analitik arazi dondurur.
+   Gercek LOLA ufuk profilleri yalnizca src/lola_horizons.h icindeki uc saha merkezi icin vardir. */
 double sample_lola_elevation_m(double lat_deg, double lon_deg);
+
+/* UTC (ISO-8601) -> J2000'den itibaren ET/TDB saniyesi. */
+double lunar_utc_to_et(const char *utc);
+/* Gunes ve Dunya'nin Ay merkezli, Ay'a sabit (govde) cercevedeki konumu (km).
+   Kernel yukluyse CSPICE (IAU_MOON, LT+S) kullanir ve true doner; degilse tarihe bagli
+   analitik Meeus serisine duser ve false doner. */
+bool lunar_moonfixed_sun_earth_km(double et, double sun_km[3], double earth_km[3]);
 SimulationResult *run_lunar_simulation(
     const char *site_name,
     double lat_deg,

@@ -1,68 +1,75 @@
--- Lua SIRALAMA / SKORLAMA KATMANI — SADECE BACKEND
--- Girdi: C11 fizik çıktısı. Çıktı: sıralama/yardımcı JSON (data/artemis_ranking.json).
+-- Lua SIRALAMA KATMANI — SADECE BACKEND
+-- Girdi: C11 fizik çıktısı (data/output.json içindeki "site_comparison").
+-- Çıktı: skora göre sıralanmış liste (data/artemis_ranking.json).
+--
+-- Bu katman fizik HESAPLAMAZ ve değer UYDURMAZ: yalnızca C çekirdeğinin ürettiği aday saha
+-- sonuçlarını okur ve sıralar. (Eski sürüm C çıktısını okumadan cos(boylam) ile sayı üretiyordu.)
 -- KURAL: UI'da gösterilecek diye burada yeni fizik veya yeni JSON alanı uydurma.
 -- Sözleşme: AGENTS.md, docs/FRONTEND_GUIDE.md.
 local M = {}
 
-local ARTEMIS_CANDIDATES = {
-    { name = "Haworth",          lat = -87.45, lon =   -5.17 },
-    { name = "Malapert Massif",  lat = -86.00, lon =    0.00 },
-    { name = "Nobile Rim 1",     lat = -85.20, lon =   53.50 },
-    { name = "Connecting Ridge", lat = -89.45, lon = -137.50 },
-    { name = "Shackleton Rim",   lat = -89.90, lon =    0.00 },
-    { name = "De Gerlache Rim",  lat = -88.50, lon =  -88.30 },
-}
+local OUTPUT_PATH = "data/output.json"
+local RANKING_PATH = "data/artemis_ranking.json"
 
-local function clamp(v, lo, hi)
-    if v < lo then return lo end
-    if v > hi then return hi end
-    return v
+local function read_file(path)
+    local f = io.open(path, "r")
+    if not f then return nil end
+    local text = f:read("a")
+    f:close()
+    return text
 end
 
-function M.evaluate_site_lua(site)
-    local lat_r = math.rad(site.lat)
-    local lon_r = math.rad(site.lon)
-    local alt_m = 1120.0 * math.sin(3.0 * lat_r) * math.cos(2.0 * lon_r)
-                +  790.0 * math.cos(5.0 * lat_r + 0.4) * math.sin(4.0 * lon_r)
-    local is_psr = (site.name:find("PSR") ~= nil) or (alt_m < -1500.0)
-    local sun_pct = is_psr and 11.4 or clamp(64.0 + 14.0 * math.cos(lon_r), 38.0, 88.0)
-    local dte_pct = clamp(68.0 + 18.0 * math.cos(lon_r), 25.0, 92.0)
-    local slope_deg = is_psr and 5.2 or 4.6
-    local dark_h = is_psr and 294.0 or 64.0
-    local score = math.floor(clamp(sun_pct * 0.45 + dte_pct * 0.30 - slope_deg * 1.8 + 22.0, 0, 100))
-    local verdict = (dark_h > 120.0) and "NO-GO" or ((dte_pct < 35.0) and "CAUTION" or "GO")
+-- data/output.json içindeki site_comparison dizisini okur. Her eleman düz (iç içe olmayan) bir
+-- nesnedir; bu yüzden tam bir JSON ayrıştırıcıya gerek yoktur.
+function M.load_candidates()
+    local text = read_file(OUTPUT_PATH)
+    if not text then return {} end
+    local block = text:match('"site_comparison"%s*:%s*%[(.-)%]')
+    if not block then return {} end
 
-    return {
-        site_name = site.name,
-        lat = site.lat,
-        lon = site.lon,
-        altitude_m = math.floor(alt_m),
-        sun_pct = tonumber(string.format("%.1f", sun_pct)),
-        dte_pct = tonumber(string.format("%.1f", dte_pct)),
-        slope_deg = slope_deg,
-        longest_dark_hours = dark_h,
-        score = score,
-        verdict = verdict
-    }
+    local results = {}
+    for obj in block:gmatch("{(.-)}") do
+        local function num(key)
+            return tonumber(obj:match('"' .. key .. '"%s*:%s*([%-%d%.]+)'))
+        end
+        local function str(key)
+            return obj:match('"' .. key .. '"%s*:%s*"([^"]*)"')
+        end
+        local name = str("site_name")
+        if name then
+            results[#results + 1] = {
+                site_name = name,
+                lat = num("latitude_deg") or 0.0,
+                lon = num("longitude_deg") or 0.0,
+                sun_pct = num("illumination_percent") or 0.0,
+                dte_pct = num("earth_visibility_percent") or 0.0,
+                slope_deg = num("slope_deg") or 0.0,
+                longest_dark_hours = num("longest_dark_hours") or 0.0,
+                score = math.floor(num("mission_score") or 0),
+                verdict = str("verdict") or "CAUTION"
+            }
+        end
+    end
+    return results
 end
 
 function M.rank_all_candidates()
-    local results = {}
-    for _, c in ipairs(ARTEMIS_CANDIDATES) do
-        results[#results + 1] = M.evaluate_site_lua(c)
-    end
-    table.sort(results, function(a, b) return a.score > b.score end)
+    local results = M.load_candidates()
+    table.sort(results, function(a, b)
+        if a.score ~= b.score then return a.score > b.score end
+        return a.site_name < b.site_name
+    end)
     return results
 end
 
 function M.build_comparison_json()
     local ranked = M.rank_all_candidates()
-    local lines = { "{\n  \"artemis_ranking\": [" }
+    local lines = { "{\n  \"source\": \"data/output.json site_comparison (C11 core)\",\n  \"artemis_ranking\": [" }
     for i, r in ipairs(ranked) do
         local comma = (i < #ranked) and "," or ""
         lines[#lines + 1] = string.format(
-            "    { \"rank\": %d, \"site_name\": \"%s\", \"lat\": %.2f, \"lon\": %.2f, \"sun_pct\": %.1f, \"dte_pct\": %.1f, \"slope_deg\": %.1f, \"score\": %d, \"verdict\": \"%s\" }%s",
-            i, r.site_name, r.lat, r.lon, r.sun_pct, r.dte_pct, r.slope_deg, r.score, r.verdict, comma
+            "    { \"rank\": %d, \"site_name\": \"%s\", \"lat\": %.4f, \"lon\": %.4f, \"sun_pct\": %.1f, \"dte_pct\": %.1f, \"slope_deg\": %.1f, \"longest_dark_hours\": %.1f, \"score\": %d, \"verdict\": \"%s\" }%s",
+            i, r.site_name, r.lat, r.lon, r.sun_pct, r.dte_pct, r.slope_deg, r.longest_dark_hours, r.score, r.verdict, comma
         )
     end
     lines[#lines + 1] = "  ]\n}"
@@ -71,7 +78,7 @@ end
 
 os.execute("mkdir -p data")
 local json_str = M.build_comparison_json()
-local f = io.open("data/artemis_ranking.json", "w")
+local f = io.open(RANKING_PATH, "w")
 if f then
     f:write(json_str)
     f:close()

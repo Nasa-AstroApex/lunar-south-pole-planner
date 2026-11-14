@@ -135,25 +135,6 @@ static double utc_to_days_since_j2000(const char *utc) {
     return jd - 2451545.0;
 }
 
-#if HAS_NAIF_CSPICE
-static void utc_to_et_safe_3b(const char *utc, double *out_et) {
-    SpiceBoolean has_lsk = SPICEFALSE;
-    SpiceInt n = 0;
-    SpiceChar dtype[4];
-    dtpool_c("DELTET/DELTA_AT", &has_lsk, &n, dtype);
-    if (failed_c()) {
-        reset_c();
-        has_lsk = SPICEFALSE;
-    }
-    if (has_lsk && utc && utc[0] != '\0') {
-        str2et_c(utc, out_et);
-        if (!failed_c()) return;
-        reset_c();
-    }
-    *out_et = utc_to_days_since_j2000(utc) * 86400.0 + 69.184;
-}
-#endif
-
 static void eval_kepler_rel_km(double a_km, double ecc, double inc_deg, double mean_anom_deg, double out_xyz[3]) {
     double M = d2r(mean_anom_deg);
     double E = M;
@@ -235,27 +216,16 @@ static void populate_spice_universe(const char *utc, Moon3BScene *out) {
         -moon_rel_earth[2]
     };
 
-#if HAS_NAIF_CSPICE
-    erract_c("SET", 0, "RETURN");
-    double et = 0.0;
-    utc_to_et_safe_3b(utc, &et);
-    SpiceInt kcount = 0;
-    ktotal_c("SPK", &kcount);
-    if (kcount > 0 && !failed_c()) {
-        double lt = 0.0, sp[3], ep[3];
-        spkpos_c("SUN", et, "J2000", "LT+S", "MOON", sp, &lt);
-        if (!failed_c()) memcpy(sun_from_moon, sp, sizeof(sp)); else reset_c();
-        spkpos_c("EARTH", et, "J2000", "LT+S", "MOON", ep, &lt);
-        if (!failed_c()) memcpy(earth_from_moon, ep, sizeof(ep)); else reset_c();
-    } else {
-        reset_c();
-    }
-#endif
+    /* Gunes/Dunya vektorleri Ay'a sabit (govde) cercevede alinir: saha enlem/boylamlari ve uzay
+       araci konumu da bu cercevededir. Eskiden J2000 kullaniliyordu; bu, alt-nokta boylamlarini ve
+       saha yukseklik acilarini yanlis yapiyordu. Kernel yoksa tarihe bagli analitik seriye duser. */
+    double et = lunar_utc_to_et(utc);
+    bool from_spice = lunar_moonfixed_sun_earth_km(et, sun_from_moon, earth_from_moon);
 
     double zero_v[3] = {0.0, 0.0, 0.0};
-    add_spice_body(out, 10,  "Sun",   "STAR",   "NONE",  false, sun_from_moon,   out->sun_helio_km,   R_SUN_KM,   0.0,             0.0,    0.0,   0.0,         0.0,       0.0,            "#fbbf24");
-    add_spice_body(out, 399, "Earth", "PLANET", "SUN",   false, earth_from_moon, out->earth_helio_km, R_EARTH_KM, AU_KM,           0.0167, 0.0,   earth_phase, 365.25636, MU_SUN_KM3_S2,  "#3b82f6");
-    add_spice_body(out, 301, "Moon",  "MOON",   "EARTH", false, zero_v,          out->moon_helio_km,  R_MOON_KM,  DIST_EARTH_MOON, 0.0549, 5.145, moon_phase,  27.321661, MU_EARTH_KM3_S2,"#cbd5e1");
+    add_spice_body(out, 10,  "Sun",   "STAR",   "NONE",  from_spice, sun_from_moon,   out->sun_helio_km,   R_SUN_KM,   0.0,             0.0,    0.0,   0.0,         0.0,       0.0,            "#fbbf24");
+    add_spice_body(out, 399, "Earth", "PLANET", "SUN",   from_spice, earth_from_moon, out->earth_helio_km, R_EARTH_KM, AU_KM,           0.0167, 0.0,   earth_phase, 365.25636, MU_SUN_KM3_S2,  "#3b82f6");
+    add_spice_body(out, 301, "Moon",  "MOON",   "EARTH", from_spice, zero_v,          out->moon_helio_km,  R_MOON_KM,  DIST_EARTH_MOON, 0.0549, 5.145, moon_phase,  27.321661, MU_EARTH_KM3_S2,"#cbd5e1");
 
     memcpy(out->sun_vec, sun_from_moon, sizeof(out->sun_vec));
     vec_normalize(out->sun_vec);
@@ -378,7 +348,19 @@ static void rk4_free_orbit_step(
     }
 }
 
-static void fill_site_physics(LunarSite3B *site, const double sun_vec[3], const double earth_vec[3]) {
+/* Yuzeydeki gozlemciden (toposentrik) cismin ufuk ustu yuksekligi; up birim vektor, body_km Ay merkezli. */
+static double topo_elevation_deg(const double up[3], const double body_km[3]) {
+    double v[3] = {
+        body_km[0] - R_MOON_KM * up[0],
+        body_km[1] - R_MOON_KM * up[1],
+        body_km[2] - R_MOON_KM * up[2]
+    };
+    double len = vec_len(v);
+    if (len < 1e-9) return 0.0;
+    return r2d(asin(clamp3b(vec_dot(v, up) / len, -1.0, 1.0)));
+}
+
+static void fill_site_physics(LunarSite3B *site, const double sun_km[3], const double earth_km[3]) {
     site->altitude_m = sample_lola_elevation_m(site->lat_deg, site->lon_deg);
     double h_n = sample_lola_elevation_m(clamp3b(site->lat_deg + 0.03, -90.0, 90.0), site->lon_deg);
     double h_s = sample_lola_elevation_m(clamp3b(site->lat_deg - 0.03, -90.0, 90.0), site->lon_deg);
@@ -387,8 +369,8 @@ static void fill_site_physics(LunarSite3B *site, const double sun_vec[3], const 
 
     double up[3];
     latlon_alt_to_xyz(site->lat_deg, site->lon_deg, 1.0, up);
-    site->sun_el_deg = r2d(asin(clamp3b(vec_dot(up, sun_vec), -1.0, 1.0)));
-    site->earth_el_deg = r2d(asin(clamp3b(vec_dot(up, earth_vec), -1.0, 1.0)));
+    site->sun_el_deg = topo_elevation_deg(up, sun_km);
+    site->earth_el_deg = topo_elevation_deg(up, earth_km);
 }
 
 void compute_3b_moon_scene(
@@ -427,9 +409,9 @@ void compute_3b_moon_scene(
     populate_spice_universe(out->active_utc, out);
 
     static const struct { const char *name; double lat, lon; } PRESETS[] = {
-        {"Shackleton Rim",        -89.90,    0.00},
-        {"Connecting Ridge",      -89.45, -137.50},
-        {"Malapert Massif",       -86.00,    0.00},
+        {"Shackleton Rim",        -89.7668, -171.87},
+        {"Connecting Ridge",      -89.4632, -137.49},
+        {"Malapert Massif",       -85.9948,   -0.23578},
         {"Haworth",               -87.45,   -5.17},
         {"Nobile Rim 1",          -85.20,   53.50},
         {"De Gerlache Rim",       -88.50,  -88.30},
@@ -442,7 +424,7 @@ void compute_3b_moon_scene(
         out->sites[i].lat_deg = PRESETS[i].lat;
         out->sites[i].lon_deg = PRESETS[i].lon;
         out->sites[i].is_custom = false;
-        fill_site_physics(&out->sites[i], out->sun_vec, out->earth_vec);
+        fill_site_physics(&out->sites[i], out->bodies[0].pos_moon_km, out->bodies[1].pos_moon_km);
     }
 
     snprintf(out->selected_site.name, sizeof(out->selected_site.name), "%s",
@@ -450,7 +432,7 @@ void compute_3b_moon_scene(
     out->selected_site.lat_deg = clamp3b(target_lat, -90.0, 90.0);
     out->selected_site.lon_deg = target_lon;
     out->selected_site.is_custom = target_is_custom;
-    fill_site_physics(&out->selected_site, out->sun_vec, out->earth_vec);
+    fill_site_physics(&out->selected_site, out->bodies[0].pos_moon_km, out->bodies[1].pos_moon_km);
 
     if (target_is_custom && out->site_count < MOON3B_MAX_SITES) {
         out->sites[out->site_count++] = out->selected_site;
@@ -491,16 +473,11 @@ void compute_3b_moon_scene(
     vec_cross(orbit_normal, start_pos, start_tangent);
     vec_normalize(start_tangent);
 
-    double earth_moon_km[3] = {
-        out->earth_helio_km[0] - out->moon_helio_km[0],
-        out->earth_helio_km[1] - out->moon_helio_km[1],
-        out->earth_helio_km[2] - out->moon_helio_km[2]
-    };
-    double sun_moon_km[3] = {
-        -out->moon_helio_km[0],
-        -out->moon_helio_km[1],
-        -out->moon_helio_km[2]
-    };
+    /* Ucuncu cisim pertürbasyonu icin Dunya ve Gunes konumu: uzay araci ile ayni (Ay'a sabit) cercevede.
+       bodies[0] = Gunes, bodies[1] = Dunya (populate_spice_universe ekleme sirasi). */
+    double earth_moon_km[3], sun_moon_km[3];
+    memcpy(sun_moon_km, out->bodies[0].pos_moon_km, sizeof(sun_moon_km));
+    memcpy(earth_moon_km, out->bodies[1].pos_moon_km, sizeof(earth_moon_km));
 
     // Serbest yörünge ilerlemesi: Ateşleme anına (t_orbit = sim_elapsed_sec - burn_elapsed_sec) kadar RK4 yörünge integrasyonu
     double orbit_prop_sec = (out->mission_mode == MISSION_MODE_ORBIT)
@@ -644,6 +621,13 @@ void compute_3b_moon_scene(
         }
     }
 
+    /* Entegrasyonun gercek son durumu: hedefe kalan mesafe ve sifirlanmamis hiz. Gudum yasasi yalnizca
+       konumu hedefler; kalan hizi sifirlamak icin gereken frenleme de delta-v butcesine eklenir. */
+    double miss_vec[3] = {pos[0] - target_xyz[0], pos[1] - target_xyz[1], pos[2] - target_xyz[2]};
+    double guidance_miss_m = vec_len(miss_vec) * 1000.0;
+    total_dv_km_s += vec_len(vel);
+
+    /* Gorsellestirme icin son nokta hedefe sabitlenir (asagidaki rapor hesaplanan sapmayi verir). */
     memcpy(out->trajectory[MOON3B_TRAJ_POINTS - 1].pos_km, target_xyz, sizeof(target_xyz));
     out->trajectory[MOON3B_TRAJ_POINTS - 1].altitude_km = 0.0;
     out->trajectory[MOON3B_TRAJ_POINTS - 1].speed_kms = 0.0012;
@@ -720,8 +704,8 @@ void compute_3b_moon_scene(
         }
 
         double micro_rad = (double)off * 2.66e-6;
-        double s_el = r2d(asin(clamp3b(vec_dot(site_up, landing_env.sun_vec), -1.0, 1.0))) + r2d(micro_rad) * 0.1;
-        double e_el = r2d(asin(clamp3b(vec_dot(site_up, landing_env.earth_vec), -1.0, 1.0))) - r2d(micro_rad) * 0.05;
+        double s_el = topo_elevation_deg(site_up, landing_env.bodies[0].pos_moon_km) + r2d(micro_rad) * 0.1;
+        double e_el = topo_elevation_deg(site_up, landing_env.bodies[1].pos_moon_km) - r2d(micro_rad) * 0.05;
 
         ls->sun_el_deg = s_el;
         ls->earth_el_deg = e_el;
@@ -737,8 +721,8 @@ void compute_3b_moon_scene(
     snprintf(rep->status_label, sizeof(rep->status_label), "BAŞARILI YUMUŞAK İNİŞ");
     snprintf(rep->touchdown_utc, sizeof(rep->touchdown_utc), "%s", out->landing_utc);
     rep->flight_duration_sec = sc->transfer_time_sec;
-    rep->miss_distance_m = 2.1 + sc->alignment_error_deg * 0.35;
-    rep->touchdown_speed_ms = 1.20;
+    rep->miss_distance_m = guidance_miss_m;   /* entegrasyondan hesaplanan, sabitleme oncesi sapma */
+    rep->touchdown_speed_ms = 1.20;           /* TASARIM HEDEFI: simule edilmis bir deger degildir */
     rep->total_dv_used_ms = total_dv_km_s * 1000.0;
     rep->sun_illumination_pct = td->sun_illumination_pct;
     rep->earth_el_deg = td->earth_el_deg;
@@ -871,7 +855,7 @@ static void write_3b_payload(FILE *fp, const Moon3BScene *s) {
     fprintf(fp, "    \"success\": %s, \"status_label\": ", rep->success ? "true" : "false");
     write_esc(fp, rep->status_label);
     fprintf(fp, ", \"touchdown_utc\": "); write_esc(fp, rep->touchdown_utc);
-    fprintf(fp, ", \"flight_duration_sec\": %.1f, \"miss_distance_m\": %.2f, \"touchdown_speed_ms\": %.2f, \"total_dv_used_ms\": %.1f, \"sun_illumination_pct\": %.1f, \"earth_el_deg\": %.2f, \"dte_connected\": %s, \"surface_temp_k\": %.1f, \"mission_score\": %d\n",
+    fprintf(fp, ", \"flight_duration_sec\": %.1f, \"miss_distance_m\": %.2f, \"touchdown_speed_ms\": %.2f, \"total_dv_used_ms\": %.1f, \"sun_illumination_pct\": %.1f, \"earth_el_deg\": %.2f, \"dte_connected\": %s, \"surface_temp_k\": %.1f, \"mission_score\": %d, \"guidance_model\": \"KINEMATIC_VISUALISATION_NO_MASS_MODEL\"\n",
             rep->flight_duration_sec, rep->miss_distance_m, rep->touchdown_speed_ms,
             rep->total_dv_used_ms, rep->sun_illumination_pct, rep->earth_el_deg,
             rep->dte_connected ? "true" : "false", rep->surface_temp_k, rep->mission_score);
