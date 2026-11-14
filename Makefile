@@ -1,32 +1,52 @@
-CC ?= gcc
-CFLAGS = -O2 -Wall -Wextra -I./cspice/include
-UNAME_S := $(shell uname -s)
+CC      ?= gcc
+CFLAGS  ?= -O2 -std=c11 -Wall -Wextra -Wpedantic -Isrc
+LDFLAGS ?= -lm
 
-ifeq ($(UNAME_S),Darwin)
-    LUA_FLAGS := $(shell pkg-config --cflags --libs lua 2>/dev/null || echo "-I/opt/homebrew/include/lua -L/opt/homebrew/lib -llua")
-else
-    LUA_FLAGS := $(shell pkg-config --cflags --libs lua5.4 2>/dev/null || echo "-I/usr/include/lua5.4 -llua5.4")
+ifneq ($(wildcard cspice/include/SpiceUsr.h),)
+  CFLAGS  += -Icspice/include
+  LDFLAGS := cspice/lib/cspice.a $(LDFLAGS)
 endif
 
-TARGET = MissionPlanner
-SRCS = src/main.c src/cspice_math.c
-SPICE_LIB = ./cspice/lib/cspice.a
+LUA_CFLAGS := $(shell pkg-config --cflags lua5.4 2>/dev/null || pkg-config --cflags lua 2>/dev/null)
+LUA_LIBS   := $(shell pkg-config --libs lua5.4 2>/dev/null || pkg-config --libs lua 2>/dev/null)
+ifneq ($(LUA_LIBS),)
+  CFLAGS  += $(LUA_CFLAGS)
+  LDFLAGS += $(LUA_LIBS)
+endif
 
-all: $(TARGET)
+BUILD_DIR := build
+TARGET    := $(BUILD_DIR)/lunar_sim
+ALIAS     := MissionPlanner
 
-$(TARGET): $(SRCS) src/cspice_math.h
-	$(CC) $(CFLAGS) $(SRCS) $(SPICE_LIB) $(LUA_FLAGS) -lm -o $(TARGET)
+CORE_SRCS := src/cspice_math.c src/3b_moon.c
+APP_SRCS  := src/main.c $(CORE_SRCS)
+HEADERS   := src/cspice_math.h src/3b_moon.h
 
-run: $(TARGET)
-	./$(TARGET)
+.PHONY: all clean test serve asan pipeline
 
-once: $(TARGET)
+all: $(TARGET) $(ALIAS)
+
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
+
+$(TARGET): $(APP_SRCS) $(HEADERS) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(APP_SRCS) -o $(TARGET) $(LDFLAGS)
+
+$(ALIAS): $(TARGET)
+	ln -sf $(TARGET) $(ALIAS)
+
+test: $(TARGET)
 	./$(TARGET) --once
 
-test:
+serve: $(TARGET)
+	./$(TARGET) --serve 8080
+
+pipeline: $(TARGET)
 	lua5.4 debug_pipeline.lua
 
-clean:
-	rm -f $(TARGET) cspice_test *.o
+asan: | $(BUILD_DIR)
+	$(CC) -O1 -g -std=c11 -Wall -Wextra -fsanitize=address,undefined -fno-omit-frame-pointer -Isrc $(APP_SRCS) -o $(BUILD_DIR)/lunar_sim_asan $(LDFLAGS)
+	./$(BUILD_DIR)/lunar_sim_asan --once
 
-.PHONY: all run once test clean
+clean:
+	rm -rf $(BUILD_DIR) $(ALIAS)

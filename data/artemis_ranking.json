@@ -1,0 +1,10 @@
+{
+  "artemis_ranking": [
+    { "rank": 1, "site_name": "Haworth", "lat": -87.45, "lon": -5.17, "sun_pct": 77.9, "dte_pct": 85.9, "slope_deg": 4.6, "score": 74, "verdict": "GO" },
+    { "rank": 2, "site_name": "Malapert Massif", "lat": -86.00, "lon": 0.00, "sun_pct": 78.0, "dte_pct": 86.0, "slope_deg": 4.6, "score": 74, "verdict": "GO" },
+    { "rank": 3, "site_name": "Shackleton Rim", "lat": -89.90, "lon": 0.00, "sun_pct": 78.0, "dte_pct": 86.0, "slope_deg": 4.6, "score": 74, "verdict": "GO" },
+    { "rank": 4, "site_name": "Nobile Rim 1", "lat": -85.20, "lon": 53.50, "sun_pct": 72.3, "dte_pct": 78.7, "slope_deg": 4.6, "score": 69, "verdict": "GO" },
+    { "rank": 5, "site_name": "De Gerlache Rim", "lat": -88.50, "lon": -88.30, "sun_pct": 64.4, "dte_pct": 68.5, "slope_deg": 4.6, "score": 63, "verdict": "GO" },
+    { "rank": 6, "site_name": "Connecting Ridge", "lat": -89.45, "lon": -137.50, "sun_pct": 53.7, "dte_pct": 54.7, "slope_deg": 4.6, "score": 54, "verdict": "GO" }
+  ]
+}

@@ -1,6 +1,20 @@
 // ui-starter/src/types/mission.ts
-// AstroApex — C11 + NASA CSPICE + Lua 5.4 Backend JSON Veri Sözleşmesi
+// AstroApex — 2D görev planı JSON sözleşmesi (C11 + CSPICE + Lua backend).
+//
+// KURAL: Bu dosyadaki alanlar backend çıktısından gelir; frontend'te fizik veya
+// yeni alan uydurulmaz. 3B sahne ayrı bir modeldir; şeması src/3b_moon.h içindedir.
+//
+// Canlı data/output.json notları:
+//   - status: "SUCCESS" (eski "OK" varsayımı yapma)
+//   - meta, decision, telemetry, optimizations, rover_traverse alanları vardır.
+//   - Çevrimdışı sample_output.json bazı alanlarda eksik olabilir; opsiyonel kabul et.
+// Ayrıntı: AGENTS.md ve docs/FRONTEND_GUIDE.md.
 
+/**
+ * 2D istek modeli. Mevcut C sunucusu GET'te yalnızca site_name, latitude_deg,
+ * longitude_deg, start_utc ve days karşılığını kullanır; diğer alanlar ileride
+ * backend desteği eklenmek üzere tutulur.
+ */
 export interface SimulationRequest {
   site_name: string;
   latitude_deg: number;
@@ -17,10 +31,11 @@ export interface SimulationRequest {
 }
 
 export interface SiteSummary {
-  site_name: string;
-  latitude_deg: number;
-  longitude_deg: number;
-  altitude_m: number;
+  /** Canlı çıktıda alan adı `meta` içinde olabilir; örnekte burada da bulunur. */
+  site_name?: string;
+  latitude_deg?: number;
+  longitude_deg?: number;
+  altitude_m?: number;
 
   total_sun_hours: number;
   illumination_percent: number;
@@ -34,8 +49,9 @@ export interface SiteSummary {
   overlap_hours: number;
   longest_dark_hours: number;
 
-  avg_sun_elevation_deg: number;
-  avg_earth_elevation_deg: number;
+  /** Örnek veride vardır; canlı özet çıktısında bulunmayabilir. */
+  avg_sun_elevation_deg?: number;
+  avg_earth_elevation_deg?: number;
   mission_score: number; // 0 - 100
 }
 
@@ -48,15 +64,21 @@ export interface VisibilityWindow {
 export interface TimeSample {
   step_index: number;
   utc: string;
-  duration_seconds: number;
+  /** Örnek veride vardır; canlı çıktıda eksik olabilir. */
+  duration_seconds?: number;
   sun_azimuth_deg: number;
   sun_elevation_deg: number;
   earth_azimuth_deg: number;
   earth_elevation_deg: number;
-  sun_terrain_horizon_deg: number;
-  earth_terrain_horizon_deg: number;
+  /** Örnek veride vardır; canlı çıktıda eksik olabilir. */
+  sun_terrain_horizon_deg?: number;
+  earth_terrain_horizon_deg?: number;
   is_sun_visible: boolean;
   is_earth_visible: boolean;
+  /** Canlı çıktıda bulunur. */
+  sun_frac?: number;
+  /** Canlı çıktıda bulunur. */
+  soc_pct?: number;
 }
 
 export interface SimulationMetadata {
@@ -74,15 +96,66 @@ export interface SimulationMetadata {
   warning?: string;
 }
 
+export interface SiteComparison {
+  site_name: string;
+  latitude_deg: number;
+  longitude_deg: number;
+  illumination_percent: number;
+  total_earth_hours: number;
+  overlap_hours: number;
+  longest_dark_hours: number;
+  mission_score: number;
+  verdict?: GoNoGoStatus;
+  /** Aşağıdaki alanlar bazı çıktılarda bulunmayabilir. */
+  total_sun_hours?: number;
+  longest_sun_hours?: number;
+  earth_visibility_percent?: number;
+  longest_earth_hours?: number;
+  dte_window_count?: number;
+  altitude_m?: number;
+  avg_sun_elevation_deg?: number;
+  avg_earth_elevation_deg?: number;
+}
+
+export interface MissionDecision {
+  verdict: GoNoGoStatus;
+  mission_score: number;
+  primary_blocker_code?: string;
+  human_reason_tr?: string;
+  qwen_05b_prompt_facts?: string;
+  blocker_wall?: {
+    azimuth_deg: number;
+    distance_km: number;
+    elevation_deg: number;
+  };
+}
+
+export interface MissionTelemetry {
+  slope_deg: number;
+  aspect_deg: number;
+  surface_temp_k: number;
+  ice_probability_pct: number;
+  terrain_loss_pct: number;
+  min_battery_soc_pct: number;
+}
+
 export interface SimulationResponse {
-  status: "OK" | "ERROR";
+  /** Canlı çıktı "SUCCESS" döner; eski örneklerde "OK" görülebilir. */
+  status: "SUCCESS" | "OK" | "ERROR";
   message?: string;
+  /** Canlı çıktıda meta; eski istemciler için metadata opsiyonel. */
+  meta?: SimulationMetadata;
   metadata?: SimulationMetadata;
   using_real_dem?: boolean;
   dem_out_of_bounds?: boolean;
+  warning_msg?: string;
   warning?: string;
 
   summary: SiteSummary;
+  decision?: MissionDecision;
+  telemetry?: MissionTelemetry;
+  optimizations?: Record<string, unknown>;
+  rover_traverse?: Record<string, unknown>;
   windows: {
     sun: VisibilityWindow[];
     earth: VisibilityWindow[];
@@ -90,7 +163,7 @@ export interface SimulationResponse {
   /** 0° (Kuzey) ile 359° arası 1° adımlı arazi engel açıları (derece) */
   terrain_horizon_mask: number[];
   samples: TimeSample[];
-  site_comparison: SiteSummary[];
+  site_comparison: SiteComparison[];
 }
 
 export type GoNoGoStatus = "GO" | "CAUTION" | "NO-GO";

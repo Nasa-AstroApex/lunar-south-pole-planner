@@ -1,5 +1,10 @@
 // ui-starter/src/services/plannerApi.ts
 // AstroApex HTTP API İstemcisi & Çevrimdışı Yedekleme Katmanı
+//
+// KURAL: Fizik burada hesaplanmaz. Backend'in döndürdüğü alanlar olduğu gibi kullanılır.
+// Mevcut C sunucusu yalnızca GET query parametrelerini okur; POST gövdesini parse etmez.
+// Bu yüzden canlı istek GET ile yapılır. Backend POST desteği eklenirse burası güncellenir.
+// Sözleşme: AGENTS.md, docs/FRONTEND_GUIDE.md.
 
 import {
   DEFAULT_SIMULATION_REQUEST,
@@ -43,12 +48,23 @@ export async function runMissionSimulation(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(resolveApiUrl(), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
+    // Backend sözleşmesi: GET /?site=&lat=&lon=&utc=&days=
+    // Diğer SimulationRequest alanları şu an C sunucusunda kullanılmıyor.
+    const url = new URL(resolveApiUrl());
+    url.searchParams.set("site", payload.site_name);
+    url.searchParams.set("lat", String(payload.latitude_deg));
+    url.searchParams.set("lon", String(payload.longitude_deg));
+    url.searchParams.set("utc", payload.start_utc);
+
+    const startMs = Date.parse(payload.start_utc);
+    const endMs = Date.parse(payload.end_utc);
+    const days = Number.isFinite(startMs) && Number.isFinite(endMs)
+      ? Math.max(1, Math.min(30, Math.round((endMs - startMs) / 86_400_000)))
+      : 14;
+    url.searchParams.set("days", String(days));
+
+    const response = await fetch(url.toString(), {
+      method: "GET",
       signal: controller.signal,
     });
 

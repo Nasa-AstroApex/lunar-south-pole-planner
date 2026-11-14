@@ -9,3 +9,12 @@ __pycache__/
 *.pyc
 data/*.bin
 .DS_Store
+build/
+*.tmp
+*.o
+*.a
+
+build/
+*.tmp
+*.o
+*.a

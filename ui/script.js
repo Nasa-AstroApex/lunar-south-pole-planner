@@ -1,3 +1,11 @@
+/*
+ * ESKİ STATİK MOCK — GERÇEK BACKEND'E BAĞLI DEĞİLDİR.
+ *
+ * Bu dosyadaki değerler demo/örnek veridir; fizik hesabı değildir.
+ * Yeni frontend işleri ui-starter/ ve test_3b_viewer.html üzerinden yürür.
+ * Buraya yeni özellik, API bağlantısı veya fizik eklemeyin.
+ * Kurallar: AGENTS.md ve docs/FRONTEND_GUIDE.md.
+ */
 const profiles = {
   "Shackleton Rim": {
     light: 64, windows: 2, overlap: 18, dark: 11, sun: 8, earth: 14

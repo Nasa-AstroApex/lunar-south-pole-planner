@@ -1,0 +1,6 @@
+BOLGE=Shackleton Base (PSR) (-89.65, 115.00)
+KARAR=NO-GO (SKOR=0/100)
+NEDEN=Dogu (E) yonunde 2.5 km uzaktaki krater duvari Gunes'i 53.8 deg kestigi icin 336 saat kesintisiz karanlik ve 84 K donma riski olusuyor.
+FIZIK=Gunes %0.0 | DTE %0.0 | Egim 0.2 deg | Sicaklik 84 K | Karanlik 336 saat
+COZUM=Mevcut konum korunabilir (en iyi tarih farki: +0 gun)
+ROVER_BUZ=En yakin PSR buzu 0.25 km (max egim 0.5 deg, 17 Wh)
