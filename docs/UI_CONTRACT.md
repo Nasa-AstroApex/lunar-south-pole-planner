@@ -10,9 +10,10 @@ Ayrıntılı kurallar ve yasaklar için [`FRONTEND_GUIDE.md`](FRONTEND_GUIDE.md)
 |---|---|
 | `GET /?site=...&lat=...&lon=...&utc=...&days=...` | Canlı 2D görev planı |
 | `GET /compare?utc=...&days=...` | Canlı 5 sahalik karsilastirma |
-| `GET /3b?...` | Canlı 3B sahne |
+| `GET /3b?...` | Canlı 3B sahne (yalnızca `localhost`/`127.0.0.1`/`?live=1`) |
+| `ui-starter/data/3b_scene.js` | Statik varsayılan sahne (`window.SCENE_3B_DATA`) |
 | `ui-starter/data/demo_snapshots.json` | Statik snapshot katalogu (backend kapalıyken) |
-| `ui-starter/sample_output.json` | Backend kapalıyken çevrimdışı örnek |
+| `ui-starter/data/sample_output.json` | Backend kapalıyken çevrimdışı 2D örnek |
 | `data/output.json` | 2D üretilen çıktı |
 | `data/3b_scene.json` / `.js` | 3B üretilen çıktı |
 

@@ -7,7 +7,7 @@ Bu doküman backend'in teknik akışını anlatır. Frontend entegrasyon kuralla
 
 | Model | Üretici | Çıktı | Şema |
 |---|---|---|---|
-| 2D görev planı | `src/cspice_math.c` + `lua/main.lua` | `data/output.json` | `ui-starter/src/types/mission.ts` |
+| 2D görev planı | `src/cspice_math.c` + `lua/main.lua` | `data/output.json` | `src/cspice_math.h` (+ `docs/UI_CONTRACT.md`) |
 | 3B sahne | `src/3b_moon.c` | `data/3b_scene.json`, `data/3b_scene.js` | `src/3b_moon.h` |
 
 Bu iki model bağımsızdır. 2D alanları 3B sahnede, 3B alanları 2D raporda kullanılmaz.
@@ -63,7 +63,9 @@ olarak değil, kaynak bilgisi olarak gösterir.
 - `compute_3b_moon_scene()`; Ay merkezli konum/hız, 96 noktalı yörünge, 60 saniyelik iniş örnekleri
   ve `touchdown_report` üretir.
 - Çıktı `data/3b_scene.json` ve `data/3b_scene.js` olarak yazılır.
-- `test_3b_viewer.html` bu veriyi çizer; fizik hesaplamaz.
+- `ui-starter/` bu veriyi çizer (motor `test_3b_viewer.html` referans prototipinden taşındı).
+  İçindeki Kepler yörünge halkaları ve RK4 iniş **kinematik görselleştirmedir**
+  (`KINEMATIC VISUALIZATION — NO MASS MODEL`); görev kararı/ölçümü üretmez, backend alanlarını değiştirmez.
 
 3B alanlarının birimleri `src/3b_moon.h` yorumlarında tanımlıdır. Özellikle:
 `pos_km` km ve `IAU_MOON` çerçevesinde, `vel_kms` km/s, `altitude_km` km (yerel sentetik zemine

@@ -13,9 +13,9 @@ fizik motoru, sahte veri veya uydurma JSON alanı oluşmasını engellemek.
 - İki ayrı veri modeli vardır:
   - 2D görev planı: `data/output.json`
   - 3B sahne: `data/3b_scene.json` / `data/3b_scene.js`
-- 2D UI sözleşmesi: `ui-starter/src/types/mission.ts`
+- 2D şema kaynağı: `src/cspice_math.h`; UI alan eşleştirmesi: `docs/UI_CONTRACT.md`
 - 3B şema kaynağı: `src/3b_moon.h`
-- Referans 3B görüntüleyici: `test_3b_viewer.html`
+- Etkileşimli 3B görüntüleyici: `ui-starter/` (referans prototip `test_3b_viewer.html` motorunun taşınmış hâli)
 - `ui/` altındaki eski arayüz **mock**'tur; gerçek backend'e bağlı değildir. Yeni iş buraya yapılmaz.
 
 ## 2. Dosya Sahipliği
@@ -28,10 +28,12 @@ fizik motoru, sahte veri veya uydurma JSON alanı oluşmasını engellemek.
 | `lua/main.lua` | Backend | Hayır |
 | `cspice/`, `data/kernels/` | Backend | Hayır |
 | `data/output.json`, `data/3b_scene.*` | Üretilen çıktı | Elle düzenleme; yeniden üret |
-| `ui-starter/src/types/mission.ts` | Ortak sözleşme | Sadece backend onayıyla |
-| `ui-starter/src/services/plannerApi.ts` | Ortak API katmanı | Sadece backend onayıyla |
-| `ui-starter/public/sample_output.json` | Çevrimdışı örnek | Güncellenecekse kaynağı belirt |
-| `test_3b_viewer.html` | Frontend referans | Evet; fizik eklemeden |
+| `ui-starter/index.html` | UI kabuğu / HUD | Evet |
+| `ui-starter/style.css` | Tema / responsive | Evet |
+| `ui-starter/app.js` | 3B viewer motoru (kinematik görselleştirme) | Evet; görev kararı üretmeden |
+| `ui-starter/debug.js` | Debug & Telemetry konsolu | Evet |
+| `ui-starter/data/3b_scene.js`, `ui-starter/data/demo_snapshots.json`, `ui-starter/data/sample_output.json` | Statik görüntü verisi (üretilir: `make snapshots`) | Elle düzenleme |
+| `test_3b_viewer.html` | Frontend referans prototip | Evet; fizik eklemeden |
 | `ui/index.html`, `ui/script.js`, `ui/style.css` | Legacy mock | Hayır; yeni özellik eklenmez |
 
 ## 3. Backend Nasıl Çalışır?
@@ -49,10 +51,46 @@ fizik motoru, sahte veri veya uydurma JSON alanı oluşmasını engellemek.
 1. `src/main.c`, `compute_3b_moon_scene()` çağırır.
 2. `src/3b_moon.c` Ay merkezli konum, hız, iniş yörüngesi, iniş saniyeleri ve touchdown raporunu üretir.
 3. Sonuç `data/3b_scene.json` ve `data/3b_scene.js` dosyalarına yazılır.
-4. `test_3b_viewer.html` bu sahneyi çizer.
+4. `ui-starter/` bu sahneyi çizer (motor `test_3b_viewer.html` referans prototipinden taşındı).
 
 **Önemli:** 2D ve 3B alanları birbirine karıştırılmaz. Örneğin 2D `summary.illumination_percent`
 ile 3B `landing_seconds[].sun_disk_pct` aynı şey değildir; her biri kendi modelinden okunur.
+
+## 3.1 ui-starter Veri Akışı
+
+Yeni `ui-starter/` tek sayfalık, İngilizce, 13 gök cisimli bir "Universe Sandbox" görüntüleyicisidir:
+
+| Dosya | Görev |
+|---|---|
+| `ui-starter/index.html` | Tam ekran `<canvas id="universe">` + HUD (üst bar, görev paneli, yönelim küresi, debug çekmecesi) |
+| `ui-starter/style.css` | Mission Control teması + `< 860px` kompakt responsive düzen |
+| `ui-starter/app.js` | 13 SPICE cismi, Kepler yörünge halkaları + kuyruk izleri, 1:1 odaklar, zaman çarpanı, sağ tık hedef, sürekli iniş, yönelim küresi |
+| `ui-starter/debug.js` | Debug & Telemetry konsolu (`D` kısayolu; `[BOOT]`/`[API]`/`[SIM]`/`[RUNTIME]`) |
+| `ui-starter/data/3b_scene.js` | Varsayılan sahne (`window.SCENE_3B_DATA`) |
+| `ui-starter/data/demo_snapshots.json` | Statik senaryo katalogu (8 senaryo, tam istek eşleşmesi) |
+| `ui-starter/data/sample_output.json` | Çevrimdışı 2D örnek |
+
+Veri akışı iki katmandan oluşur:
+
+1. **Statik katman** — `data/3b_scene.js` varsayılan sahneyi, `data/demo_snapshots.json` senaryo
+   katalogunu yükler. Backend kapalıyken arayüz bu katmanla çalışır.
+2. **Canlı C11 katmanı** — `GET http://127.0.0.1:8080/3b?...` yalnızca `location.hostname`
+   `localhost`/`127.0.0.1` (veya açık `?live=1`) iken yoklanır. GitHub Pages (`https://`) üzerinde
+   gereksiz localhost HTTP yoklaması yapılmaz (Mixed Content / Connection Refused önlenir).
+
+Tüm `fetch`/`<script>`/`<link>` yolları **göreli** olmalıdır (`data/...`, `app.js`, `style.css`);
+kök `/data/...` yolu GitHub Pages alt dizininde bozulur.
+
+### Kinematik görselleştirme sınırı
+
+`app.js` içindeki Kepler yörünge halkaları, RK4 serbest yörünge adımı ve iniş manevrası
+**kinematik görselleştirmedir** (`KINEMATIC VISUALIZATION — NO MASS MODEL` etiketi, `physics_valid=false`).
+Bunlar yalnızca etkileşimli gösterim içindir:
+
+- Görev kararı, skor, görünürlük, ufuk, ışıklandırma, sıcaklık veya batarya üretmez.
+- Backend'in `trajectory`, `landing_seconds`, `touchdown_report`, `sites`, `sun`/`earth` vektörleri
+  mevcut olduğunda **olduğu gibi** okunur.
+- C11 sabitleri (`MOON3B_TRAJ_POINTS`, mass/fuel/thrust, kernel yolları) UI tarafından değiştirilmez.
 
 ## 4. Build ve Çalıştırma
 
@@ -106,13 +144,16 @@ site, lat, lon, utc, days
 ### Bilinen API sınırlaması
 
 Mevcut C sunucusu **POST gövdesini parse etmez**; yalnızca GET query parametrelerini okur.
-`ui-starter/src/services/plannerApi.ts` bu yüzden canlı isteği GET ile yapar. Backend ekibi POST
-desteği eklerse istemci de birlikte güncellenir. Backend kapalıysa `offline-sample` modunu açıkça
-göster. Frontend'te bu açığı “fizik hesaplayarak” kapatma; bu bir backend sözleşme işidir.
+`ui-starter/app.js` bu yüzden canlı `/3b` isteğini GET ile yapar ve yalnızca `localhost`/`127.0.0.1`
+(veya `?live=1`) iken yoklar. Backend ekibi POST desteği eklerse istemci de birlikte güncellenir.
+Backend kapalıysa arayüz statik `data/demo_snapshots.json` kataloguna düşer ve `C11 ENGINE: STATIC`
+rozetini gösterir. Frontend'te bu açığı “fizik hesaplayarak” kapatma; bu bir backend sözleşme işidir.
 
 ## 6. 2D JSON Sözleşmesi
 
-Kaynak tip dosyası: `ui-starter/src/types/mission.ts`.
+Şema kaynağı: `src/cspice_math.h`; UI alan eşleştirmesi: `docs/UI_CONTRACT.md`.
+(`ui-starter/src/types/mission.ts` eski TS sözleşmesi kaldırılmıştır; artık bir 2D UI bileşeni yoktur,
+2D alanlar yalnızca dokümante edilir.)
 
 Canlı `data/output.json` üst seviye alanları:
 
@@ -204,15 +245,17 @@ Alan eklenecekse önce `src/3b_moon.h` ve backend birlikte güncellenir.
 1. Veriyi `fetch` ile al; alanları doğrudan kullan.
 2. Birimleri yalnızca **gösterim** için dönüştür (`km` → `m`, `s` → `dk` gibi). JSON değerini geri yazma.
 3. Eksik/opsiyonel alanları `undefined` kontrolüyle ele al.
-4. Backend kapalıysa `source: "offline-sample"` bilgisini kullanıcıya göster.
-5. 3B viewer'da `data/3b_scene.js` yüklüyse onu kullan; canlı API varsa `/3b` ile güncelle.
+4. Kaynak durumunu rozetle göster: canlı iken `C11 HTTP: LIVE`, statik iken `C11 ENGINE: STATIC`.
+5. 3B viewer'da `data/3b_scene.js` (varsayılan) ve `data/demo_snapshots.json` (katalog) yüklenir; canlı API yalnızca `localhost`/`127.0.0.1`/`?live=1` iken `/3b` ile güncellenir.
 6. Değişiklikten sonra `make test` ve `make validate` çalıştır; hangi alanları kullandığını PR'a yaz.
 7. UI'da “hesaplanan” değer ile “backend'den gelen” değeri karıştırma; tooltip/kaynak etiketi ekle.
 
 ## 9. Kesinlikle Yapılmaması Gerekenler
 
 - Güneş/Dünya azimut-yükseklik açısını tarihten yeniden hesaplamak.
-- Yörünge, iniş, gölge, ufuk, sıcaklık veya batarya modeli yazmak.
+- Yörünge, iniş, gölge, ufuk, sıcaklık veya batarya modeli yazarak **görev kararı/ölçümü üretmek**.
+  (`app.js` içindeki Kepler/RK4 yalnızca `KINEMATIC VISUALIZATION — NO MASS MODEL` etiketli
+  kinematik görselleştirmedir; bilimsel sonuç üretmez.)
 - `mission_score`, `verdict`, `success` gibi kararları frontend'te yeniden üretmek.
 - JSON alanlarını yeniden adlandırmak (`meta` → `metadata`, `warning_msg` → `warning` gibi).
 - `lon` değerini keyfî olarak 0-360 aralığına çevirmek; backend değerini olduğu gibi kullanmak.
@@ -226,7 +269,7 @@ Alan eklenecekse önce `src/3b_moon.h` ve backend birlikte güncellenir.
 | Hata | Doğrusu |
 |---|---|
 | “Güneş açısını tarihten hesaplayayım” | `samples[].sun_elevation_deg` alanını oku |
-| “3B yörüngeyi JS'te simüle edeyim” | `trajectory` dizisini çiz |
+| “3B görev yörüngesini JS'te türeteyim” | Backend `trajectory` dizisini çiz; Kepler halkaları yalnızca kinematik görseldir |
 | “`touchdown_report.outcome` yoksa türeteyim” | `success` ve `status_label` kullan |
 | “`status === "OK"` kontrolü” | Canlı çıktıda `SUCCESS` |
 | “`metadata` alanı” | Canlı çıktıda `meta` |
@@ -253,7 +296,8 @@ Sen AstroApex projesinde yalnızca frontend katmanında çalışan bir ajanısı
 
 Kurallar:
 - src/, lua/, cspice/, data/kernels/ ve üretilen data/*.json dosyalarını değiştirme.
-- JavaScript/TypeScript içinde fizik, yörünge, gölge, ufuk, sıcaklık veya iniş hesabı yazma.
+- Bilimsel fizik (efemeris, gölge, ufuk, ışıklandırma, sıcaklık, skor) hesabı yazma; bunları
+  backend çıktısından oku. `app.js` içindeki Kepler/RK4 yalnızca kinematik görselleştirmedir.
 - Yeni JSON alan adı uydurma; mevcut alanları olduğu gibi kullan.
 - Backend çıktısını yeniden hesaplama; yalnızca gösterim birimi dönüşümü yap.
 - API'nin şu an GET tabanlı olduğunu, POST gövdesinin desteklenmediğini varsay.

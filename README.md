@@ -49,7 +49,7 @@ horizons into fast, decision-ready site/date trade studies for the lunar south p
 
 Two independent data models are produced and must never be mixed:
 
-1. **2D mission plan** → `data/output.json` (contract: `ui-starter/src/types/mission.ts`)
+1. **2D mission plan** → `data/output.json` (schema: `src/cspice_math.h`; UI contract: `docs/UI_CONTRACT.md`)
 2. **3B scene** → `data/3b_scene.json` / `data/3b_scene.js` (schema: `src/3b_moon.h`)
 
 ## Build & run
@@ -98,23 +98,57 @@ incomplete, the engine fails closed rather than silently using a fallback epheme
 
 ## Web demo (no compiler required)
 
-The frontend is a static, display-only mission control in `ui-starter/`:
+`ui-starter/` is a self-contained, English "Universe Sandbox" mission control:
 
-- **Live mode** — when served from `localhost` (or `?live=1`), it fetches the running
-  C11 backend.
-- **Static mode** — otherwise it reads a pre-generated snapshot catalog
-  (`ui-starter/data/demo_snapshots.json`) with an exact-request match, and falls back
-  to `ui-starter/sample_output.json`.
+- **`index.html`** — full-screen canvas shell + HUD layout (top HUD, mission panel, attitude sphere, debug console).
+- **`style.css`** — Mission Control theme with a compact `< 860px` responsive layout.
+- **`app.js`** — the 13-body SPICE scene: Kepler orbit rings + trails, 1:1 camera focus modes, a unified time warp, right-click custom landing target, a continuous descent simulation, and a 3D spacecraft attitude sphere.
+- **`debug.js`** — a built-in live Debug & Telemetry console (`D` key or the "Debug Logs" button; `[BOOT]`/`[API]`/`[SIM]`/`[RUNTIME]` records, `.log` download, copy-to-clipboard).
+- **`data/3b_scene.js`** — default scene (`window.SCENE_3B_DATA`).
+- **`data/demo_snapshots.json`** — the static scenario catalog (8 scenarios, exact-request match).
+- **`data/sample_output.json`** — offline 2D sample.
 
-Serve it locally:
+### Features
+
+- 13 SPICE bodies (Sun, Earth, Moon, Venus, Mars + 8 asteroids) with Kepler orbit rings and trails.
+- 1:1 real-km camera focus modes — `Moon 1:1`, `Earth–Moon 1:1`, `Sun & Asteroids 1:1` — plus a unified time warp (`0x`–`86400x`).
+- Right-click the Moon to pick a custom landing point, plus 6 preset south-pole sites.
+- Continuous-time descent (`Start Descent Maneuver`, `Loop`, `Return to Orbit`) with an honestly labeled `KINEMATIC VISUALIZATION — NO MASS MODEL` Touchdown Report.
+- 3D spacecraft attitude sphere with `Target/Qibla`, `Prograde`, `Nadir`, `Solar`, `Earth DTE` presets and `Vx/Vy/Vz` + `Az/El` controls.
+
+### Run it
+
+Static preview (offline, no compiler):
 
 ```bash
-python3 -m http.server 8000 --directory ui-starter
+cd ui-starter && python3 -m http.server 8000
 ```
 
-Then open <http://localhost:8000>. Deploy `ui-starter/` to any static host (GitHub
-Pages, Vercel, Netlify) for a login-free public demo. See
-`.github/workflows/pages.yml` for an optional GitHub Pages build.
+Live C11 engine sync (serves the real backend and streams `/3b` into the viewer when the page is on `localhost`):
+
+```bash
+./build/lunar_sim --serve 8080
+```
+
+The viewer auto-connects to the live backend **only** when the page host is
+`localhost`/`127.0.0.1` (or when `?live=1` is passed explicitly). On any other host it
+stays on the static snapshot catalog and never issues a localhost HTTP probe — no
+Mixed Content / Connection Refused noise on GitHub Pages.
+
+Refresh the static catalog and offline sample:
+
+```bash
+make snapshots && make validate
+```
+
+### Public demo
+
+Deploy `ui-starter/` to any static host (GitHub Pages, Vercel, Netlify). The live demo
+is published at:
+
+> **https://nasa-astroapex.github.io/lunar-south-pole-planner/**
+
+See `.github/workflows/pages.yml` for the GitHub Pages build.
 
 ## Data provenance & honesty
 
@@ -130,9 +164,12 @@ Pages, Vercel, Netlify) for a login-free public demo. See
 | 3B frame | Sun/Earth/site/spacecraft/trajectory in `IAU_MOON` | `frame = "IAU_MOON"` |
 | 3B descent phase | Post-burn descent, distinct from instantaneous orbit | `trajectory_phase = "POST_BURN_DESCENT"` |
 
-The frontend is **display-only**: it never recomputes orbital motion, illumination,
-visibility, horizon masks, scores, or decisions. All values are copied from the
-backend JSON.
+The `ui-starter/` 13-body engine is a **kinematic visualization**, not a physics model:
+its Kepler orbit rings and RK4 descent are interactive renderings that carry the
+`KINEMATIC VISUALIZATION — NO MASS MODEL` label and are never used to derive mission
+decisions. The C11 backend remains the source of truth for ephemerides, horizon masks,
+illumination, visibility windows, temperatures, scores, and GO/NO-GO verdicts; the
+frontend copies those values verbatim and must never override backend constants.
 
 ## NASA data & resources
 

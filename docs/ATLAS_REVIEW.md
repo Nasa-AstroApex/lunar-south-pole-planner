@@ -43,7 +43,7 @@ rules (`AGENTS.md`, `docs/FRONTEND_GUIDE.md`).
    - Replace `demElevationKm` with a real LOLA heightfield for the supported sites.
    - Replace the JS Sun model with backend `/3b` vectors.
    - Translate the UI to English.
-4. Until then, the login-free public demo is `ui-starter/` (English, display-only,
-   real backend or static snapshots).
+4. Until then, the login-free public demo is `ui-starter/` (English, an interactive
+   13-body kinematic viewer backed by the real C11 engine or static snapshots).
 
 This preserves the visual strength without overclaiming the data.
