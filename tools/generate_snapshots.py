@@ -18,10 +18,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BIN = ROOT / "build" / "lunar_sim"
-OUT = ROOT / "ui-starter" / "data" / "demo_snapshots.json"
+DATA_DIR = ROOT / "ui-starter" / "data"
+OUT = DATA_DIR / "demo_snapshots.json"
 SAMPLE_SRC = ROOT / "data" / "output.json"
-SAMPLE_DST_PUBLIC = ROOT / "ui-starter" / "public" / "sample_output.json"
-SAMPLE_DST_ROOT = ROOT / "ui-starter" / "sample_output.json"
+SAMPLE_DST = DATA_DIR / "sample_output.json"
+SCENE_JS_DST = DATA_DIR / "3b_scene.js"
 
 SCENARIOS = [
     {"label": "Shackleton Rim · 2026-10-18", "site": "Shackleton Rim", "lat": -89.7668, "lon": -171.87, "utc": "2026-10-18T00:00:00", "days": 14},
@@ -75,12 +76,16 @@ def main() -> int:
     OUT.write_text(json.dumps(catalog, separators=(",", ":")), encoding="utf-8")
     print(f"Wrote {OUT} with {len(scenarios)} scenarios")
 
-    # Regenerate the offline sample (last scenario: Shackleton 2026-10-18 is first; use it)
-    run_backend("Shackleton Rim", -89.7668, -171.87, "2026-10-18T00:00:00", 14)
+    # Regenerate the offline sample and default 3B scene (Connecting Ridge default)
+    run_backend("Connecting Ridge", -89.4632, -137.49, "2026-10-29T14:30:00", 14)
     sample = (ROOT / "data" / "output.json").read_text(encoding="utf-8")
-    SAMPLE_DST_PUBLIC.write_text(sample, encoding="utf-8")
-    SAMPLE_DST_ROOT.write_text(sample, encoding="utf-8")
-    print(f"Wrote {SAMPLE_DST_PUBLIC} and {SAMPLE_DST_ROOT}")
+    SAMPLE_DST.write_text(sample, encoding="utf-8")
+    print(f"Wrote {SAMPLE_DST}")
+
+    # Default 3B scene for the static UI (window.SCENE_3B_DATA)
+    scene_js = (ROOT / "data" / "3b_scene.js").read_text(encoding="utf-8")
+    SCENE_JS_DST.write_text(scene_js, encoding="utf-8")
+    print(f"Wrote {SCENE_JS_DST}")
 
     return 0
 
