@@ -46,10 +46,12 @@ function cacheElements() {
     "timelineRange", "sunWindowList", "earthWindowList", "comparisonBody", "comparisonSort",
     "comparisonCaption", "sceneBadges", "sceneWarning", "sceneEmpty", "sceneContent",
     "sceneCanvas", "resetSceneView", "sceneScaleLabel", "sceneSiteName", "sceneActiveUtc",
-    "sceneFrame", "scenePhase", "sceneModel", "scenePhysics", "sceneAltitude", "sceneSpeed",
-    "trajectorySlider", "trajectoryOutput", "trajectoryTime", "trajectoryAltitude",
-    "trajectorySpeed", "sceneSiteBody", "sceneSiteCount", "modelBadges", "provenance2d",
-    "provenance3d", "requestDetails", "snapshotDetails", "modelWarnings",
+    "scenePhaseLabel", "sceneAltitude", "sceneSpeed", "sceneTtb", "sceneProvenance",
+    "sceneSiteBody", "sceneSiteCount",
+    "focusMoon", "focusEarth", "focusSun", "warpButton", "iconsButton",
+    "descentButton", "loopButton", "orbitButton", "sceneMini", "alignBadge",
+    "vec-x", "vec-y", "vec-z", "vec-az", "vec-el", "scReadout",
+    "modelBadges", "provenance2d", "provenance3d", "requestDetails", "snapshotDetails", "modelWarnings",
     "tab-overview", "tab-scene", "tab-model", "panel-overview", "panel-scene", "panel-model",
   ];
   ids.forEach((id) => { els[id] = $(id); });
@@ -483,6 +485,7 @@ function renderScene() {
   els.sceneBadges.innerHTML = "";
   els.sceneBadges.appendChild(sourceBadge(scene.frame || "IAU_MOON", "good"));
   els.sceneBadges.appendChild(sourceBadge(scene.trajectory_phase || "—", "neutral"));
+  els.sceneBadges.appendChild(sourceBadge(scene.horizon_source || "—", scene.horizon_source === "LOLA_80M_SKYLINE" ? "good" : "warn"));
   els.sceneBadges.appendChild(sourceBadge(scene.physics_valid ? "Physics validated" : "Kinematic (not validated)", scene.physics_valid ? "good" : "warn"));
 
   els.sceneWarning.hidden = scene.physics_valid;
@@ -491,21 +494,27 @@ function renderScene() {
   const site = scene.selected_site || {};
   els.sceneSiteName.textContent = site.name || "Selected site";
   els.sceneActiveUtc.textContent = scene.active_utc || "—";
-  els.sceneFrame.textContent = scene.frame || "—";
-  els.scenePhase.textContent = scene.trajectory_phase || "—";
-  els.sceneModel.textContent = scene.scene_model || "—";
-  els.scenePhysics.textContent = scene.physics_valid ? "Yes" : "No";
+
   const sc = scene.spacecraft || {};
   els.sceneAltitude.textContent = `${sc.altitude_km.toFixed(2)} km`;
   els.sceneSpeed.textContent = `${sc.current_speed_kms.toFixed(4)} km/s`;
+  els.scenePhaseLabel.textContent = "Orbit";
+  els.sceneTtb.textContent = "—";
+  syncAttitudeInputs();
 
-  const traj = scene.trajectory || [];
-  els.trajectorySlider.disabled = traj.length === 0;
-  els.trajectorySlider.max = Math.max(0, traj.length - 1);
-  els.trajectorySlider.value = state.trajectoryIndex;
-  if (traj.length) {
-    els.trajectoryOutput.textContent = `${state.trajectoryIndex + 1} / ${traj.length}`;
-  }
+  const prov = els.sceneProvenance;
+  prov.innerHTML = "";
+  const addP = (term, val) => {
+    const div = document.createElement("div");
+    div.innerHTML = `<dt>${term}</dt><dd>${val}</dd>`;
+    prov.appendChild(div);
+  };
+  addP("Reference frame", scene.frame || "—");
+  addP("Trajectory phase", scene.trajectory_phase || "—");
+  addP("Scene model", scene.scene_model || "—");
+  addP("Physics validated", scene.physics_valid ? "Yes" : "No");
+  addP("Sun visible", scene.sun_visible ? "Yes" : "No");
+  addP("Earth visible", scene.earth_visible ? "Yes" : "No");
 
   const sites = scene.sites || [];
   els.sceneSiteCount.textContent = `${sites.length} sites`;
@@ -523,8 +532,131 @@ function renderScene() {
     els.sceneSiteBody.appendChild(tr);
   });
 
-  if (!state.sceneView) state.sceneView = new SceneView(els.sceneCanvas);
-  state.sceneView.setScene(scene, state.trajectoryIndex);
+  if (!state.sceneView) {
+    state.sceneView = new SceneView(els.sceneCanvas, els.sceneMini);
+    state.sceneView.onCustomTarget = (lat, lon) => handleCustomTarget(lat, lon);
+    state.sceneView.onState = (s) => updateSceneTelemetry(s);
+    state.sceneView.start();
+    bindSceneControls();
+  }
+  state.sceneView.setScene(scene);
+}
+
+function syncAttitudeInputs() {
+  const sc = state.scene?.spacecraft || {};
+  const cmd = sc.commanded_vec || [0, 0, 0];
+  els["vec-x"].value = cmd[0].toFixed(3);
+  els["vec-y"].value = cmd[1].toFixed(3);
+  els["vec-z"].value = cmd[2].toFixed(3);
+  els["vec-az"].value = Math.round(sc.commanded_azimuth_deg || 0);
+  els["vec-el"].value = Math.round(sc.commanded_elevation_deg || 0);
+  updateAttitudeReadout();
+}
+
+function updateAttitudeReadout() {
+  const sc = state.scene?.spacecraft || {};
+  const cmd = sc.commanded_vec || [0, 0, 0];
+  const qib = sc.qibla_vec || [0, 0, 0];
+  els.scReadout.innerHTML =
+    `Azimuth: <b>${(sc.commanded_azimuth_deg ?? 0).toFixed(1)}°</b> | Elevation: <b>${(sc.commanded_elevation_deg ?? 0).toFixed(1)}°</b><br>` +
+    `Target: [${qib.map((v) => v.toFixed(2)).join(", ")}]<br>` +
+    `Command: [${cmd.map((v) => v.toFixed(2)).join(", ")}]`;
+  const aligned = sc.is_qibla_aligned;
+  els.alignBadge.textContent = aligned ? "ALIGNED (Δ < 2°)" : `OFFSET: ${(sc.alignment_error_deg ?? 0).toFixed(1)}°`;
+  els.alignBadge.className = `align-badge ${aligned ? "is-aligned" : "is-offset"}`;
+}
+
+function updateSceneTelemetry(s) {
+  const phase = s.missionMode === 0 ? "Orbit" : (s.missionMode === 1 ? "Descent" : "Landed");
+  els.scenePhaseLabel.textContent = phase;
+  els.sceneAltitude.textContent = s.altitude_km >= 1.0 ? `${s.altitude_km.toFixed(2)} km` : `${(s.altitude_km * 1000).toFixed(0)} m`;
+  els.sceneSpeed.textContent = s.current_speed_kms >= 0.05 ? `${s.current_speed_kms.toFixed(3)} km/s` : `${(s.current_speed_kms * 1000).toFixed(1)} m/s`;
+  if (s.missionMode === 1) {
+    const rem = Math.max(0, s.transfer_time_sec - s.burn_elapsed);
+    els.sceneTtb.textContent = `${rem.toFixed(0)} s`;
+  } else {
+    els.sceneTtb.textContent = "—";
+  }
+}
+
+function handleCustomTarget(lat, lon) {
+  els.siteSelect.value = CUSTOM_SITE_VALUE;
+  els.latitudeInput.value = lat.toFixed(4);
+  els.longitudeInput.value = lon.toFixed(4);
+  els.customCoordinates.hidden = false;
+  runStudy();
+}
+
+function bindSceneControls() {
+  const focusMap = { focusMoon: "MOON", focusEarth: "EARTH", focusSun: "SUN" };
+  Object.keys(focusMap).forEach((id) => {
+    els[id].addEventListener("click", () => {
+      ["focusMoon", "focusEarth", "focusSun"].forEach((b) => els[b].classList.remove("is-active"));
+      els[id].classList.add("is-active");
+      state.sceneView.setFocusMode(focusMap[id]);
+    });
+  });
+  els.warpButton.addEventListener("click", () => {
+    const w = state.sceneView.cycleWarp();
+    els.warpButton.textContent = w === 0 ? "Time: 0x (pause)" : `Time: ${w.toLocaleString("en-US")}x`;
+  });
+  els.iconsButton.addEventListener("click", () => {
+    const on = !state.sceneView.showIcons;
+    state.sceneView.setBodyIcons(on);
+    els.iconsButton.textContent = `Icons: ${on ? "ON" : "OFF"}`;
+    els.iconsButton.classList.toggle("is-active", on);
+  });
+  els.descentButton.addEventListener("click", () => {
+    state.sceneView.startDescent();
+    els.descentButton.textContent = "Restart Descent";
+    els.orbitButton.disabled = false;
+  });
+  els.loopButton.addEventListener("click", () => {
+    const on = state.sceneView.toggleLoop();
+    els.loopButton.textContent = `Loop: ${on ? "ON" : "OFF"}`;
+    els.loopButton.classList.toggle("is-active", on);
+  });
+  els.orbitButton.addEventListener("click", () => {
+    state.sceneView.returnToOrbit();
+    els.descentButton.textContent = "Start Descent Maneuver";
+  });
+  els.resetSceneView.addEventListener("click", () => { state.sceneView.reset(); });
+
+  document.querySelectorAll(".vec-presets .button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const sc = state.scene?.spacecraft || {};
+      const preset = btn.dataset.preset;
+      let v = sc.qibla_vec;
+      if (preset === "prograde") v = sc.prograde_vec;
+      else if (preset === "nadir") v = sc.nadir_vec;
+      else if (preset === "solar") v = sc.solar_vec;
+      else if (preset === "earth") v = sc.earth_dte_vec;
+      if (v) applyCommandVector(v[0], v[1], v[2]);
+    });
+  });
+
+  ["vec-x", "vec-y", "vec-z"].forEach((id) => {
+    els[id].addEventListener("input", () => {
+      const vx = parseFloat(els["vec-x"].value) || 0;
+      const vy = parseFloat(els["vec-y"].value) || 0;
+      const vz = parseFloat(els["vec-z"].value) || 0;
+      applyCommandVector(vx, vy, vz);
+    });
+  });
+  ["vec-az", "vec-el"].forEach((id) => {
+    els[id].addEventListener("input", () => {
+      const az = ((parseFloat(els["vec-az"].value) || 0) * Math.PI) / 180;
+      const el = ((parseFloat(els["vec-el"].value) || 0) * Math.PI) / 180;
+      applyCommandVector(Math.cos(el) * Math.cos(az), Math.cos(el) * Math.sin(az), Math.sin(el));
+    });
+  });
+}
+
+function applyCommandVector(vx, vy, vz) {
+  if (!state.sceneView || !state.scene) return;
+  state.sceneView.setCommandVector([vx, vy, vz]);
+  syncAttitudeInputs();
+  updateAttitudeReadout();
 }
 
 function renderProvenance() {
@@ -621,7 +753,6 @@ function render() {
   renderModelWarnings();
   drawHorizon(els.horizonCanvas, state.data, state.sampleIndex);
   drawTimeline(els.timelineCanvas, state.data, state.sampleIndex);
-  if (state.sceneView) state.sceneView.setSelectedIndex(state.trajectoryIndex);
 }
 
 /* ---------- tab navigation ---------- */
@@ -659,20 +790,7 @@ function bindEvents() {
     drawHorizon(els.horizonCanvas, state.data, state.sampleIndex);
     drawTimeline(els.timelineCanvas, state.data, state.sampleIndex);
   });
-  els.trajectorySlider.addEventListener("input", () => {
-    state.trajectoryIndex = Number(els.trajectorySlider.value);
-    const traj = state.scene?.trajectory || [];
-    const p = traj[state.trajectoryIndex];
-    els.trajectoryOutput.textContent = `${state.trajectoryIndex + 1} / ${traj.length}`;
-    if (p) {
-      els.trajectoryTime.textContent = `${p.t_sec.toFixed(1)} s`;
-      els.trajectoryAltitude.textContent = `${p.alt_km.toFixed(2)} km`;
-      els.trajectorySpeed.textContent = `${p.speed_kms.toFixed(4)} km/s`;
-    }
-    if (state.sceneView) state.sceneView.setSelectedIndex(state.trajectoryIndex);
-  });
   els.comparisonSort.addEventListener("change", renderComparison);
-  els.resetSceneView.addEventListener("click", () => { if (state.sceneView) state.sceneView.reset(); });
   els.dismissNotice.addEventListener("click", clearNotice);
   ["tab-overview", "tab-scene", "tab-model"].forEach((id) => {
     els[id].addEventListener("click", () => switchTab(id.replace("tab-", "")));

@@ -455,3 +455,26 @@ button:focus-visible, a:focus-visible, summary:focus-visible, input[type="range"
 
 /* --- model warning rows (added) --- */
 .model-warning { padding: 8px 11px; border-left: 3px solid var(--gold); background: #1b1610; color: #e7c887; font-size: 11px; margin: 6px 0; }
+
+/* --- 3B scene toolbar & attitude sphere (added) --- */
+.scene-toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; align-items: center; }
+.scene-toolbar-group { display: flex; flex-wrap: wrap; gap: 5px; }
+.button-quiet.is-active { background: var(--green); color: #04120d; border-color: var(--green); }
+
+.attitude-panel { margin-top: 14px; }
+.attitude-card { display: block; }
+.attitude-body { display: grid; grid-template-columns: 320px 1fr; gap: 16px; align-items: start; }
+.attitude-canvas { width: 320px; height: 230px; background: #02040a; border: 1px solid #1e293b; display: block; cursor: grab; }
+.attitude-canvas:active { cursor: grabbing; }
+.attitude-controls { display: block; }
+.vec-presets { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 8px; }
+.vec-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 0 0 6px; }
+.vec-grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin: 0 0 8px; }
+.vec-grid label, .vec-grid-2 label { font-size: 10px; color: #94a3b8; display: flex; flex-direction: column; gap: 3px; }
+.vec-grid input, .vec-grid-2 input { background: #0f172a; border: 1px solid #334155; color: #f8fafc; padding: 4px 6px; font-size: 11px; width: 100%; }
+.sc-meta { font-size: 10.5px; color: #cbd5e1; line-height: 1.5; border-top: 1px solid #1e293b; padding-top: 6px; margin-top: 2px; }
+.align-badge { display: inline-block; padding: 3px 8px; border: 1px solid currentColor; border-radius: 4px; font: 700 10px var(--mono); }
+.align-badge.is-aligned { color: #2dd4bf; border-color: #2dd4bf; }
+.align-badge.is-offset { color: #f59e0b; border-color: #f59e0b; }
+.scene-provenance { margin-top: 12px; }
+@media (max-width: 720px) { .attitude-body { grid-template-columns: 1fr; } .attitude-canvas { width: 100%; } }

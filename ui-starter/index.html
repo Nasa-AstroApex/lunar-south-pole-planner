@@ -214,7 +214,7 @@
 
       <section id="panel-scene" role="tabpanel" aria-labelledby="tab-scene" tabindex="0" hidden>
         <div class="mission-heading">
-          <div><p class="eyebrow">IAU_MOON / DESCENT VIEW</p><h1>3B mission scene</h1><p class="mission-context">A direct display projection of backend positions, trajectory points, and landing sites.</p></div>
+          <div><p class="eyebrow">IAU_MOON / SPICE UNIVERSE</p><h1>3B mission scene</h1><p class="mission-context">13 SPICE bodies, Kepler orbit rings, camera focus modes, time warp, descent replay, and a spacecraft attitude sphere — all from the backend scene schema.</p></div>
           <div class="badge-row" id="sceneBadges"></div>
         </div>
         <div class="scene-warning" id="sceneWarning" role="note" hidden></div>
@@ -222,35 +222,81 @@
           <span class="empty-orbit" aria-hidden="true"></span><h2>3B scene not available</h2><p>The current response has no scene. A snapshot may include one; the sample-output fallback contains 2D mission data only.</p>
         </div>
         <div id="sceneContent" hidden>
+          <div class="scene-toolbar">
+            <div class="scene-toolbar-group" role="group" aria-label="Camera focus">
+              <button class="button button-quiet is-active" id="focusMoon" type="button">Moon (1:1)</button>
+              <button class="button button-quiet" id="focusEarth" type="button">Earth–Moon (1:1)</button>
+              <button class="button button-quiet" id="focusSun" type="button">Sun &amp; asteroids (1:1)</button>
+            </div>
+            <div class="scene-toolbar-group" role="group" aria-label="Time warp">
+              <button class="button button-quiet" id="warpButton" type="button">Time: 1x</button>
+            </div>
+            <div class="scene-toolbar-group" role="group" aria-label="Body markers">
+              <button class="button button-quiet is-active" id="iconsButton" type="button">Icons: ON</button>
+            </div>
+            <div class="scene-toolbar-group" role="group" aria-label="Descent simulation">
+              <button class="button button-primary" id="descentButton" type="button">Start Descent Maneuver</button>
+              <button class="button button-quiet" id="loopButton" type="button">Loop: OFF</button>
+              <button class="button button-quiet" id="orbitButton" type="button">Return to Orbit</button>
+            </div>
+          </div>
+
           <section class="scene-grid">
             <article class="panel scene-panel">
               <div class="panel-heading">
-                <div><p class="eyebrow">DIRECT GEOMETRY</p><h2>Moon-centered trajectory</h2></div>
+                <div><p class="eyebrow">SPICE UNIVERSE</p><h2>Sun · Earth · Moon · asteroids</h2></div>
                 <div class="scene-actions"><button class="button button-quiet" id="resetSceneView" type="button">Reset view</button></div>
               </div>
-              <canvas id="sceneCanvas" class="scene-canvas" tabindex="0" role="img" aria-label="Interactive display projection of the Moon, backend trajectory, spacecraft and landing sites">A canvas-capable browser is required for the 3B scene.</canvas>
-              <div class="scene-footer"><span>Drag to rotate · Scroll to zoom · Arrow keys rotate · + / − zoom · Home resets</span><span id="sceneScaleLabel">Display projection only</span></div>
+              <canvas id="sceneCanvas" class="scene-canvas" tabindex="0" role="img" aria-label="Interactive 3D universe: Sun, Earth, Moon, asteroids, Kepler orbits, spacecraft trajectory and landing sites">A canvas-capable browser is required for the 3B scene.</canvas>
+              <div class="scene-footer"><span>Drag to rotate · Scroll to zoom · Arrow keys rotate · + / − zoom · Right-click Moon for a custom target · Home resets</span><span id="sceneScaleLabel">Backend positions, snapshot epoch</span></div>
             </article>
             <aside class="panel scene-inspector">
-              <p class="eyebrow">SCENE INSPECTOR</p><h2 id="sceneSiteName">Selected site</h2><p class="sample-time" id="sceneActiveUtc">Not available</p>
+              <p class="eyebrow">LIVE TELEMETRY</p><h2 id="sceneSiteName">Selected site</h2><p class="sample-time" id="sceneActiveUtc">Not available</p>
               <dl class="telemetry-list">
-                <div><dt>Reference frame</dt><dd id="sceneFrame">—</dd></div>
-                <div><dt>Trajectory phase</dt><dd id="scenePhase">—</dd></div>
-                <div><dt>Scene model</dt><dd id="sceneModel">—</dd></div>
-                <div><dt>Physics validated</dt><dd id="scenePhysics">—</dd></div>
-                <div><dt>Spacecraft altitude</dt><dd id="sceneAltitude">—</dd></div>
-                <div><dt>Spacecraft speed</dt><dd id="sceneSpeed">—</dd></div>
+                <div><dt>Flight phase</dt><dd id="scenePhaseLabel">Orbit</dd></div>
+                <div><dt>Altitude</dt><dd id="sceneAltitude">—</dd></div>
+                <div><dt>Speed</dt><dd id="sceneSpeed">—</dd></div>
+                <div><dt>Time to touchdown</dt><dd id="sceneTtb">—</dd></div>
               </dl>
-              <div class="trajectory-control">
-                <label for="trajectorySlider"><span>Trajectory point</span><output id="trajectoryOutput" for="trajectorySlider">Not available</output></label>
-                <input id="trajectorySlider" type="range" min="0" max="0" value="0" step="1" disabled>
-                <dl class="trajectory-readout"><div><dt>Elapsed</dt><dd id="trajectoryTime">—</dd></div><div><dt>Altitude</dt><dd id="trajectoryAltitude">—</dd></div><div><dt>Speed</dt><dd id="trajectorySpeed">—</dd></div></dl>
-              </div>
+              <dl class="provenance-list scene-provenance" id="sceneProvenance"></dl>
             </aside>
           </section>
+
           <article class="panel scene-sites-panel">
             <div class="panel-heading"><div><p class="eyebrow">BACKEND SITE GEOMETRY</p><h2>Landing site markers</h2></div><span class="data-chip" id="sceneSiteCount">0 sites</span></div>
             <div class="table-scroll"><table><caption class="sr-only">Landing sites in the 3B scene</caption><thead><tr><th scope="col">Site</th><th scope="col">Latitude</th><th scope="col">Longitude</th><th scope="col">Altitude</th><th scope="col">Altitude source</th><th scope="col">Sun elevation</th><th scope="col">Earth elevation</th></tr></thead><tbody id="sceneSiteBody"></tbody></table></div>
+          </article>
+
+          <article class="panel attitude-panel">
+            <div class="attitude-card">
+              <div class="panel-heading">
+                <div><p class="eyebrow">SPACECRAFT ATTITUDE</p><h2>Target / Qibla alignment sphere</h2></div>
+                <span class="align-badge" id="alignBadge">ALIGNED</span>
+              </div>
+              <div class="attitude-body">
+                <canvas id="sceneMini" class="attitude-canvas" role="img" aria-label="3D spacecraft attitude sphere with target, prograde, nadir, solar and Earth DTE vectors">A canvas-capable browser is required for the attitude sphere.</canvas>
+                <div class="attitude-controls">
+                  <div class="vec-presets">
+                    <button class="button button-quiet" data-preset="qibla" type="button">Target</button>
+                    <button class="button button-quiet" data-preset="prograde" type="button">Prograde</button>
+                    <button class="button button-quiet" data-preset="nadir" type="button">Nadir</button>
+                    <button class="button button-quiet" data-preset="solar" type="button">Solar</button>
+                    <button class="button button-quiet" data-preset="earth" type="button">Earth DTE</button>
+                  </div>
+                  <div class="vec-grid">
+                    <label>Command Vx<input id="vec-x" type="number" step="0.05" value="0.23"></label>
+                    <label>Command Vy<input id="vec-y" type="number" step="0.05" value="0.89"></label>
+                    <label>Command Vz<input id="vec-z" type="number" step="0.05" value="-0.39"></label>
+                  </div>
+                  <div class="vec-grid-2">
+                    <label>Azimuth (°)<input id="vec-az" type="number" step="1" value="75"></label>
+                    <label>Elevation (°)<input id="vec-el" type="number" step="1" value="-23"></label>
+                  </div>
+                  <div class="sc-meta" id="scReadout"></div>
+                  <p class="microcopy">Presets and vector inputs set the displayed command vector from backend attitude vectors. Values are not recomputed as physics.</p>
+                </div>
+              </div>
+            </div>
           </article>
         </div>
       </section>
