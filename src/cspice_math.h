@@ -35,9 +35,14 @@ typedef struct {
     double slope_deg;
     double illumination_percent;
     double earth_visibility_percent;
+    double total_sun_hours;
+    double longest_sun_hours;
     double total_earth_hours;
+    double longest_earth_hours;
+    int dte_window_count;
     double overlap_hours;
     double longest_dark_hours;
+    double min_battery_soc_pct;
     int mission_score;
     char verdict[16];
 } CandidateComparison;
@@ -86,6 +91,7 @@ typedef struct {
     double horizon_mask_deg[CSPICE_HORIZON_RAYS];
     double blocker_azimuth_deg;
     double blocker_distance_km;
+    bool blocker_distance_known;   // LOLA profilinde mesafe yoktur; JSON'da null yazilir
     double blocker_elevation_deg;
 
     // 6. 5x5 km Mikro-Konum Optimizasyonu ("İki Adım Yana Kay")
@@ -134,12 +140,34 @@ typedef struct {
     double *timeline_earth_el;
     double *timeline_dte_vis;
     double *timeline_soc_pct;
+
+    // 12. Gunes/Dunya Ufuk Gecisleri (sunset/earthset, sunrise/earthrise)
+    bool sun_visible_now;
+    bool earth_visible_now;
+    char next_sunset_utc[32];
+    char next_sunrise_utc[32];
+    double hours_to_sunset;    // -1 ise aralikta olay yok
+    double hours_to_sunrise;   // -1 ise aralikta olay yok
+    char next_earthset_utc[32];
+    char next_earthrise_utc[32];
+    double hours_to_earthset;  // -1 ise aralikta olay yok
+    double hours_to_earthrise; // -1 ise aralikta olay yok
+    bool event_search_exhausted;
 } SimulationResult;
 
 bool init_spice_engine(const char *meta_kernel_path);
 /* DIKKAT: Adina ragmen bu fonksiyon gercek LOLA verisi OKUMAZ; sentetik analitik arazi dondurur.
    Gercek LOLA ufuk profilleri yalnizca src/lola_horizons.h icindeki uc saha merkezi icin vardir. */
-double sample_lola_elevation_m(double lat_deg, double lon_deg);
+double sample_synthetic_dem_elevation_m(double lat_deg, double lon_deg);
+
+/* Saha merkezi gercek LOLA profilinde ise LOLA zemin yuksekligini (m) yazar ve true doner.
+   Aksi halde false doner; cagiran taraf sentetik DEM'e duser. */
+bool lunar_lola_ground_altitude_m(double lat_deg, double lon_deg, double *alt_m);
+
+/* 360 derecelik ufuk maskesini hesaplar (her derece icin ufuk yukseklik acisi).
+   Gercek LOLA profili varsa onu, yoksa sentetik arazi kullanir. 2D ve 3B ortak fonksiyonudur. */
+void lunar_compute_horizon_mask(double lat_deg, double lon_deg, double alt_m,
+                                double mask_out[CSPICE_HORIZON_RAYS], char *horizon_source, size_t src_sz);
 
 /* UTC (ISO-8601) -> J2000'den itibaren ET/TDB saniyesi. */
 double lunar_utc_to_et(const char *utc);
@@ -156,5 +184,7 @@ SimulationResult *run_lunar_simulation(
 );
 void free_simulation_result(SimulationResult *res);
 bool export_simulation_json(const char *filepath, const SimulationResult *res);
+/* JSON'u bellek tamponuna yazar; cagiran free() ile serbest birakir. NULL ise hata. */
+char *export_simulation_json_string(const SimulationResult *res);
 
 #endif // CSPICE_MATH_H

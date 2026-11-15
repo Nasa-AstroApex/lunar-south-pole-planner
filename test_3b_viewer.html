@@ -781,7 +781,7 @@ function evaluateContinuousState() {
   sceneData.landing_utc = tdUtc;
   sceneData.touchdown_report = {
     success: true,
-    status_label: "BAŞARILI YUMUŞAK İNİŞ",
+    status_label: "KİNEMATİK İNİŞ (FİZİKSEL DOĞRULAMA YOK)",
     touchdown_utc: tdUtc,
     flight_duration_sec: totalT,
     miss_distance_m: 2.1 + sc.alignment_error_deg * 0.35,
@@ -790,8 +790,7 @@ function evaluateContinuousState() {
     sun_illumination_pct: sunPctNow,
     earth_el_deg: earthElNow,
     dte_connected: earthElNow > 0,
-    surface_temp_k: sunPctNow > 15 ? (215 + 95 * (sunPctNow / 100)) : 68.0,
-    mission_score: Math.max(45, Math.min(99, Math.round(96 - tgt.slope_deg * 1.5 - (earthElNow <= 0 ? 18 : 0))))
+    surface_temp_k: sunPctNow > 15 ? (215 + 95 * (sunPctNow / 100)) : 68.0
   };
 }
 
@@ -1247,7 +1246,7 @@ function updateHUD() {
       <div class="report-box">
         <div class="report-title">
           <span>✓ İNİŞ DURUM RAPORU — ${rep.status_label}</span>
-          <span>SKOR: ${rep.mission_score}/100</span>
+          <span>SKOR: — (kinematik)</span>
         </div>
         <div class="row"><span>Hedef &amp; Temas UTC</span><span class="val">${tgt.name} | ${rep.touchdown_utc}</span></div>
         <div class="row"><span>Uçuş Süresi / Harcanan ΔV</span><span class="val">${(rep.flight_duration_sec / 60).toFixed(1)} dk | ${rep.total_dv_used_ms.toFixed(1)} m/s</span></div>

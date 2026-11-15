@@ -1,10 +1,10 @@
 {
+  "source": "data/output.json site_comparison (C11 core)",
   "artemis_ranking": [
-    { "rank": 1, "site_name": "Haworth", "lat": -87.45, "lon": -5.17, "sun_pct": 77.9, "dte_pct": 85.9, "slope_deg": 4.6, "score": 74, "verdict": "GO" },
-    { "rank": 2, "site_name": "Malapert Massif", "lat": -86.00, "lon": 0.00, "sun_pct": 78.0, "dte_pct": 86.0, "slope_deg": 4.6, "score": 74, "verdict": "GO" },
-    { "rank": 3, "site_name": "Shackleton Rim", "lat": -89.90, "lon": 0.00, "sun_pct": 78.0, "dte_pct": 86.0, "slope_deg": 4.6, "score": 74, "verdict": "GO" },
-    { "rank": 4, "site_name": "Nobile Rim 1", "lat": -85.20, "lon": 53.50, "sun_pct": 72.3, "dte_pct": 78.7, "slope_deg": 4.6, "score": 69, "verdict": "GO" },
-    { "rank": 5, "site_name": "De Gerlache Rim", "lat": -88.50, "lon": -88.30, "sun_pct": 64.4, "dte_pct": 68.5, "slope_deg": 4.6, "score": 63, "verdict": "GO" },
-    { "rank": 6, "site_name": "Connecting Ridge", "lat": -89.45, "lon": -137.50, "sun_pct": 53.7, "dte_pct": 54.7, "slope_deg": 4.6, "score": 54, "verdict": "GO" }
+    { "rank": 1, "site_name": "Haworth", "lat": -87.4500, "lon": -5.1700, "sun_pct": 100.0, "dte_pct": 27.1, "slope_deg": 2.8, "longest_dark_hours": 0.0, "score": 69, "verdict": "CAUTION" },
+    { "rank": 2, "site_name": "Malapert Massif", "lat": -85.9948, "lon": -0.2358, "sun_pct": 83.9, "dte_pct": 31.8, "slope_deg": 0.1, "longest_dark_hours": 39.0, "score": 69, "verdict": "CAUTION" },
+    { "rank": 3, "site_name": "Connecting Ridge", "lat": -89.4632, "lon": -137.4900, "sun_pct": 69.1, "dte_pct": 23.5, "slope_deg": 0.4, "longest_dark_hours": 80.0, "score": 39, "verdict": "NO-GO" },
+    { "rank": 4, "site_name": "Nobile Rim 1", "lat": -85.2000, "lon": 53.5000, "sun_pct": 24.3, "dte_pct": 49.4, "slope_deg": 0.1, "longest_dark_hours": 247.0, "score": 25, "verdict": "NO-GO" },
+    { "rank": 5, "site_name": "Shackleton Rim", "lat": -89.7668, "lon": -171.8700, "sun_pct": 1.0, "dte_pct": 0.0, "slope_deg": 0.0, "longest_dark_hours": 331.0, "score": 0, "verdict": "NO-GO" }
   ]
 }

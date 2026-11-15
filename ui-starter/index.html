@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="AstroApex lunar south pole mission planning and site trade studies.">
+  <title>AstroApex — Lunar Mission Control</title>
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to mission data</a>
+
+  <header class="app-header">
+    <a class="brand" href="./" aria-label="AstroApex Mission Control home">
+      <svg class="brand-mark" viewBox="0 0 42 42" aria-hidden="true">
+        <circle cx="21" cy="21" r="17"></circle>
+        <path d="M28 7a15 15 0 0 0 0 28M12 16h8M10 23h5M15 29h7"></path>
+        <path class="brand-orbit" d="M4 28c8 5 24 3 34-9"></path>
+      </svg>
+      <span class="brand-copy"><strong>ASTROAPEX</strong><small>LUNAR SOUTH POLE</small></span>
+    </a>
+    <p class="tagline">Real JPL ephemerides. Terrain-aware horizons. 30-second site/date trade studies.</p>
+    <div class="header-status">
+      <span class="source-badge is-loading" id="sourceBadge"><span class="status-dot"></span>CONNECTING</span>
+      <span class="header-time" id="headerTime">Waiting for mission data</span>
+    </div>
+  </header>
+
+  <div class="workspace">
+    <aside class="side-rail" aria-label="Mission navigation">
+      <p class="rail-label">MISSION VIEWS</p>
+      <nav class="view-tabs" role="tablist" aria-label="Mission views" aria-orientation="vertical">
+        <button class="view-tab is-active" id="tab-overview" type="button" role="tab" aria-selected="true" aria-controls="panel-overview" data-tab="overview">
+          <span class="tab-index">01</span><span>Mission overview<small>Decision, horizon and timeline</small></span>
+        </button>
+        <button class="view-tab" id="tab-scene" type="button" role="tab" aria-selected="false" aria-controls="panel-scene" data-tab="scene" tabindex="-1">
+          <span class="tab-index">02</span><span>3B scene<small>Descent geometry and sites</small></span>
+        </button>
+        <button class="view-tab" id="tab-model" type="button" role="tab" aria-selected="false" aria-controls="panel-model" data-tab="model" tabindex="-1">
+          <span class="tab-index">03</span><span>Model &amp; provenance<small>Sources, limits and request</small></span>
+        </button>
+      </nav>
+      <div class="rail-engine">
+        <span>DECISION ENGINE</span>
+        <strong>C11 + CSPICE + Lua</strong>
+        <p>The browser renders backend output. It does not calculate physics, illumination, or mission scores.</p>
+      </div>
+    </aside>
+
+    <main id="main-content" class="main-content">
+      <div class="notice" id="notice" role="status" aria-live="polite" hidden>
+        <span class="notice-mark" aria-hidden="true">!</span>
+        <div><strong id="noticeTitle"></strong><p id="noticeText"></p></div>
+        <button type="button" class="icon-button" id="dismissNotice" aria-label="Dismiss notification">×</button>
+      </div>
+
+      <section class="panel control-panel" aria-labelledby="controls-title">
+        <div class="control-heading">
+          <div><p class="eyebrow">REQUEST CONSOLE</p><h2 id="controls-title">Trade study parameters</h2></div>
+          <p id="requestHint">Live requests are attempted on localhost. Static mode requires an exact snapshot match.</p>
+        </div>
+        <form id="missionForm" class="controls-grid">
+          <label class="field scenario-field" for="scenarioSelect">
+            <span>Snapshot scenario</span>
+            <select id="scenarioSelect" aria-describedby="scenarioHelp">
+              <option value="">Current result</option>
+            </select>
+            <small id="scenarioHelp">Choose a stored run to switch instantly.</small>
+          </label>
+          <label class="field" for="siteSelect">
+            <span>Landing site</span>
+            <select id="siteSelect" required>
+              <option value="Shackleton Rim">Shackleton Rim</option>
+              <option value="Connecting Ridge">Connecting Ridge</option>
+              <option value="Malapert Massif">Malapert Massif</option>
+              <option value="Nobile Rim 1">Nobile Rim 1</option>
+              <option value="Haworth">Haworth</option>
+              <option value="__custom">Custom coordinates</option>
+            </select>
+          </label>
+          <label class="field" for="startInput">
+            <span>Start date &amp; time (UTC)</span>
+            <input id="startInput" type="datetime-local" step="60" required>
+          </label>
+          <label class="field" for="daysSelect">
+            <span>Duration</span>
+            <select id="daysSelect" required>
+              <option value="7">7 days</option>
+              <option value="14" selected>14 days</option>
+              <option value="21">21 days</option>
+              <option value="28">28 days</option>
+            </select>
+          </label>
+          <fieldset class="custom-coordinates" id="customCoordinates" hidden>
+            <legend>Custom coordinates</legend>
+            <label class="field" for="latitudeInput"><span>Latitude (degrees)</span><input id="latitudeInput" type="number" min="-90" max="90" step="0.0001" value="-89.5" required></label>
+            <label class="field" for="longitudeInput"><span>Longitude (degrees)</span><input id="longitudeInput" type="number" min="-180" max="180" step="0.0001" value="0" required></label>
+          </fieldset>
+          <div class="control-actions">
+            <button class="button button-primary" id="runButton" type="submit"><span>Run trade study</span><span aria-hidden="true">→</span></button>
+            <button class="button button-secondary" id="slipButton" type="button" title="Add 21 days to the requested start and run the study">Schedule Slip +21 Days</button>
+          </div>
+        </form>
+        <div class="loading-track" id="loadingTrack" aria-label="Loading mission data" hidden><span></span></div>
+      </section>
+
+      <section id="panel-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0">
+        <div class="mission-heading">
+          <div>
+            <p class="eyebrow">ACTIVE SITE ASSESSMENT</p>
+            <h1 id="missionSite">Awaiting mission data</h1>
+            <p class="mission-context" id="missionContext">The current backend or snapshot request will appear here.</p>
+          </div>
+          <div class="badge-row" id="sourceBadges" aria-label="Data source labels"></div>
+        </div>
+
+        <div class="backend-warning" id="backendWarning" role="note" hidden></div>
+
+        <section class="decision-grid" aria-label="Mission decision and event countdowns">
+          <article class="panel verdict-panel">
+            <div class="verdict-copy">
+              <p class="panel-kicker">BACKEND DECISION</p>
+              <span class="verdict-pill is-unavailable" id="verdictPill">NOT AVAILABLE</span>
+              <h2 id="decisionTitle">No decision loaded</h2>
+              <p id="decisionDetail">Verdict and score are read only from the response decision object.</p>
+              <div class="blocker-code" id="blockerCode" hidden></div>
+            </div>
+            <div class="score-ring" id="scoreRing" aria-label="Mission score not available">
+              <div><strong id="scoreValue">—</strong><span>/ 100</span><small>MISSION SCORE</small></div>
+            </div>
+          </article>
+          <article class="panel countdown-panel">
+            <div class="countdown-icon sun-icon" aria-hidden="true"></div>
+            <p class="panel-kicker">SUNSET COUNTDOWN</p>
+            <strong id="sunsetCountdown">Not available</strong>
+            <p id="sunsetNote">Awaiting data.events.sun.hours_to_sunset</p>
+          </article>
+          <article class="panel countdown-panel">
+            <div class="countdown-icon earth-icon" aria-hidden="true"></div>
+            <p class="panel-kicker">EARTHSET COUNTDOWN</p>
+            <strong id="earthsetCountdown">Not available</strong>
+            <p id="earthsetNote">Awaiting data.events.earth.hours_to_earthset</p>
+          </article>
+        </section>
+
+        <section class="kpi-grid" aria-label="Mission key performance indicators">
+          <article class="panel kpi-card"><div class="kpi-top"><span>ILLUMINATION</span><i class="kpi-dot sun-dot"></i></div><strong id="kpiIllumination">—</strong><p id="kpiIlluminationDetail">Backend summary</p></article>
+          <article class="panel kpi-card"><div class="kpi-top"><span>DTE VISIBILITY</span><i class="kpi-dot earth-dot"></i></div><strong id="kpiDte">—</strong><p id="kpiDteDetail">Backend summary</p></article>
+          <article class="panel kpi-card"><div class="kpi-top"><span>SUN + DTE OVERLAP</span><i class="kpi-dot overlap-dot"></i></div><strong id="kpiOverlap">—</strong><p id="kpiOverlapDetail">Backend summary</p></article>
+          <article class="panel kpi-card"><div class="kpi-top"><span>LONGEST DARK PERIOD</span><i class="kpi-dot dark-dot"></i></div><strong id="kpiDark">—</strong><p id="kpiDarkDetail">Backend summary</p></article>
+        </section>
+
+        <section class="analysis-grid">
+          <article class="panel chart-panel">
+            <div class="panel-heading">
+              <div><p class="eyebrow">TERRAIN VISIBILITY</p><h2>360° horizon profile</h2></div>
+              <span class="data-chip" id="horizonSampleLabel">No sample selected</span>
+            </div>
+            <p class="panel-description">Backend terrain mask with the selected sample’s Sun and Earth coordinates. Angles are not recalculated in the browser.</p>
+            <canvas id="horizonCanvas" class="horizon-canvas" role="img" aria-label="360 degree terrain horizon plot">A canvas-capable browser is required for the horizon plot.</canvas>
+            <div class="chart-legend"><span><i class="legend-swatch terrain-swatch"></i>Terrain horizon</span><span><i class="legend-swatch sun-swatch"></i>Sun</span><span><i class="legend-swatch earth-swatch"></i>Earth</span></div>
+            <div class="sample-control">
+              <label for="sampleSlider"><span>Simulation sample</span><output id="sampleOutput" for="sampleSlider">Not available</output></label>
+              <input id="sampleSlider" type="range" min="0" max="0" value="0" step="1" disabled>
+              <div class="range-endpoints"><span id="sampleStart">Start</span><span id="sampleEnd">End</span></div>
+            </div>
+          </article>
+
+          <aside class="panel sample-panel" aria-labelledby="sample-title">
+            <div class="panel-heading"><div><p class="eyebrow">SELECTED TELEMETRY</p><h2 id="sample-title">Sample inspector</h2></div><span class="sample-index" id="sampleIndex">—</span></div>
+            <p class="sample-time" id="sampleUtc">Not available</p>
+            <dl class="telemetry-list">
+              <div><dt>Sun azimuth</dt><dd id="sampleSunAz">—</dd></div>
+              <div><dt>Sun elevation</dt><dd id="sampleSunEl">—</dd></div>
+              <div><dt>Sun visible</dt><dd id="sampleSunVisible">—</dd></div>
+              <div><dt>Earth azimuth</dt><dd id="sampleEarthAz">—</dd></div>
+              <div><dt>Earth elevation</dt><dd id="sampleEarthEl">—</dd></div>
+              <div><dt>Earth visible</dt><dd id="sampleEarthVisible">—</dd></div>
+              <div><dt>Battery state of charge</dt><dd id="sampleSoc">—</dd></div>
+            </dl>
+            <p class="microcopy">All values on this card are copied directly from <code>samples[]</code>.</p>
+          </aside>
+        </section>
+
+        <article class="panel timeline-panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">MISSION WINDOW</p><h2>Visibility timeline</h2></div>
+            <span class="data-chip" id="timelineRange">Not available</span>
+          </div>
+          <p class="panel-description">Sun and Earth windows are drawn from <code>windows</code>; elevation traces and the selected-time cursor come from <code>samples</code>.</p>
+          <canvas id="timelineCanvas" class="timeline-canvas" role="img" aria-label="Sun and Earth visibility windows and elevation timeline">A canvas-capable browser is required for the mission timeline.</canvas>
+          <div class="chart-legend"><span><i class="legend-swatch sun-swatch"></i>Sun window / elevation</span><span><i class="legend-swatch earth-swatch"></i>Earth window / elevation</span><span><i class="legend-line"></i>Selected sample</span></div>
+          <details class="window-details" id="windowDetails">
+            <summary>Reported visibility windows</summary>
+            <div class="window-columns"><div><h3>Sun windows</h3><ul id="sunWindowList"></ul></div><div><h3>Earth windows</h3><ul id="earthWindowList"></ul></div></div>
+          </details>
+        </article>
+
+        <article class="panel comparison-panel">
+          <div class="panel-heading comparison-heading">
+            <div><p class="eyebrow">FIVE-SITE TRADE</p><h2>Candidate site comparison</h2><p class="panel-description" id="comparisonCaption">Scores and verdicts are supplied by the backend.</p></div>
+            <label class="compact-field" for="comparisonSort"><span>Sort sites</span><select id="comparisonSort"><option value="array">Backend array order</option><option value="score">Mission score, high to low</option></select></label>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <caption class="sr-only">Candidate landing sites with backend mission scores and visibility metrics</caption>
+              <thead><tr><th scope="col">Site</th><th scope="col">Score</th><th scope="col">Verdict</th><th scope="col">Illumination</th><th scope="col">DTE</th><th scope="col">Overlap</th><th scope="col">Longest dark</th><th scope="col">Min. battery</th></tr></thead>
+              <tbody id="comparisonBody"><tr><td colspan="8" class="empty-cell">No comparison data loaded.</td></tr></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section id="panel-scene" role="tabpanel" aria-labelledby="tab-scene" tabindex="0" hidden>
+        <div class="mission-heading">
+          <div><p class="eyebrow">IAU_MOON / DESCENT VIEW</p><h1>3B mission scene</h1><p class="mission-context">A direct display projection of backend positions, trajectory points, and landing sites.</p></div>
+          <div class="badge-row" id="sceneBadges"></div>
+        </div>
+        <div class="scene-warning" id="sceneWarning" role="note" hidden></div>
+        <div class="panel empty-state" id="sceneEmpty">
+          <span class="empty-orbit" aria-hidden="true"></span><h2>3B scene not available</h2><p>The current response has no scene. A snapshot may include one; the sample-output fallback contains 2D mission data only.</p>
+        </div>
+        <div id="sceneContent" hidden>
+          <section class="scene-grid">
+            <article class="panel scene-panel">
+              <div class="panel-heading">
+                <div><p class="eyebrow">DIRECT GEOMETRY</p><h2>Moon-centered trajectory</h2></div>
+                <div class="scene-actions"><button class="button button-quiet" id="resetSceneView" type="button">Reset view</button></div>
+              </div>
+              <canvas id="sceneCanvas" class="scene-canvas" tabindex="0" role="img" aria-label="Interactive display projection of the Moon, backend trajectory, spacecraft and landing sites">A canvas-capable browser is required for the 3B scene.</canvas>
+              <div class="scene-footer"><span>Drag to rotate · Scroll to zoom · Arrow keys rotate · + / − zoom · Home resets</span><span id="sceneScaleLabel">Display projection only</span></div>
+            </article>
+            <aside class="panel scene-inspector">
+              <p class="eyebrow">SCENE INSPECTOR</p><h2 id="sceneSiteName">Selected site</h2><p class="sample-time" id="sceneActiveUtc">Not available</p>
+              <dl class="telemetry-list">
+                <div><dt>Reference frame</dt><dd id="sceneFrame">—</dd></div>
+                <div><dt>Trajectory phase</dt><dd id="scenePhase">—</dd></div>
+                <div><dt>Scene model</dt><dd id="sceneModel">—</dd></div>
+                <div><dt>Physics validated</dt><dd id="scenePhysics">—</dd></div>
+                <div><dt>Spacecraft altitude</dt><dd id="sceneAltitude">—</dd></div>
+                <div><dt>Spacecraft speed</dt><dd id="sceneSpeed">—</dd></div>
+              </dl>
+              <div class="trajectory-control">
+                <label for="trajectorySlider"><span>Trajectory point</span><output id="trajectoryOutput" for="trajectorySlider">Not available</output></label>
+                <input id="trajectorySlider" type="range" min="0" max="0" value="0" step="1" disabled>
+                <dl class="trajectory-readout"><div><dt>Elapsed</dt><dd id="trajectoryTime">—</dd></div><div><dt>Altitude</dt><dd id="trajectoryAltitude">—</dd></div><div><dt>Speed</dt><dd id="trajectorySpeed">—</dd></div></dl>
+              </div>
+            </aside>
+          </section>
+          <article class="panel scene-sites-panel">
+            <div class="panel-heading"><div><p class="eyebrow">BACKEND SITE GEOMETRY</p><h2>Landing site markers</h2></div><span class="data-chip" id="sceneSiteCount">0 sites</span></div>
+            <div class="table-scroll"><table><caption class="sr-only">Landing sites in the 3B scene</caption><thead><tr><th scope="col">Site</th><th scope="col">Latitude</th><th scope="col">Longitude</th><th scope="col">Altitude</th><th scope="col">Altitude source</th><th scope="col">Sun elevation</th><th scope="col">Earth elevation</th></tr></thead><tbody id="sceneSiteBody"></tbody></table></div>
+          </article>
+        </div>
+      </section>
+
+      <section id="panel-model" role="tabpanel" aria-labelledby="tab-model" tabindex="0" hidden>
+        <div class="mission-heading"><div><p class="eyebrow">DATA LINEAGE</p><h1>Model &amp; provenance</h1><p class="mission-context">Inspect the active request, source labels, model limitations, and response metadata.</p></div><div class="badge-row" id="modelBadges"></div></div>
+        <section class="model-grid">
+          <article class="panel model-card"><div class="panel-heading"><div><p class="eyebrow">2D MISSION PLAN</p><h2>Simulation response</h2></div><span class="model-number">01</span></div><dl class="provenance-list" id="provenance2d"></dl></article>
+          <article class="panel model-card"><div class="panel-heading"><div><p class="eyebrow">3B SCENE</p><h2>Visualization model</h2></div><span class="model-number">02</span></div><dl class="provenance-list" id="provenance3d"></dl></article>
+          <article class="panel model-card"><div class="panel-heading"><div><p class="eyebrow">ACTIVE REQUEST</p><h2>Query parameters</h2></div><span class="model-number">03</span></div><dl class="provenance-list" id="requestDetails"></dl></article>
+          <article class="panel model-card"><div class="panel-heading"><div><p class="eyebrow">STATIC CATALOG</p><h2>Snapshot lineage</h2></div><span class="model-number">04</span></div><dl class="provenance-list" id="snapshotDetails"></dl></article>
+        </section>
+        <article class="panel policy-panel">
+          <p class="eyebrow">DISPLAY POLICY</p><h2>Backend evidence, clearly labeled</h2>
+          <div class="policy-grid"><div><strong>No browser physics</strong><p>Orbital motion, illumination, visibility, horizon masks, and mission decisions are never recomputed in JavaScript.</p></div><div><strong>No approximate substitution</strong><p>If an exact static scenario is unavailable, the current result stays on screen and the missing request is identified.</p></div><div><strong>Model limits stay visible</strong><p>Synthetic terrain, analytic or heuristic ephemerides, and non-validated 3B physics are labeled wherever they apply.</p></div></div>
+          <div class="model-warnings" id="modelWarnings"></div>
+        </article>
+      </section>
+
+      <footer class="app-footer"><span>ASTROAPEX / LUNAR SOUTH POLE PLANNER</span><span id="footerSource">No data source connected</span></footer>
+    </main>
+  </div>
+</body>
+</html>

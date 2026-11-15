@@ -11,6 +11,7 @@
  *   - data/3b_scene.* üretilen dosyadır; elle düzenlenmez.
  * Ayrıntı: AGENTS.md ve docs/FRONTEND_GUIDE.md.
  */
+#define _POSIX_C_SOURCE 200809L
 #include "3b_moon.h"
 #include "cspice_math.h"
 #include <math.h>
@@ -44,6 +45,13 @@ static inline double clamp3b(double v, double lo, double hi) {
     return v < lo ? lo : (v > hi ? hi : v);
 }
 
+static inline double wrap_lon3b(double lon) {
+    if (!isfinite(lon)) return 0.0;
+    double x = fmod(lon + 180.0, 360.0);
+    if (x < 0.0) x += 360.0;
+    return x - 180.0;
+}
+
 static inline double d2r(double d) { return d * (M_PI / 180.0); }
 static inline double r2d(double r) { return r * (180.0 / M_PI); }
 
@@ -55,6 +63,27 @@ static void latlon_alt_to_xyz(double lat_deg, double lon_deg, double radius_km, 
     out[2] = radius_km * sin(la);
 }
 
+/* Analitik heliosentrik vektorleri (yaklasik J2000 duzlemi) Ay'a sabit cerceveye cevirir.
+   Boylece spice_bodies[].pos_km alanlarinin tamami IAU_MOON cercevesinde olur. */
+static void rotate_approx_helio_to_moonfixed(const double in[3], const char *utc, double out[3]) {
+#if HAS_NAIF_CSPICE
+    SpiceDouble et = lunar_utc_to_et(utc);
+    SpiceDouble rot[3][3];
+    pxform_c("J2000", "IAU_MOON", et, rot);
+    if (failed_c()) {
+        reset_c();
+        memcpy(out, in, 3 * sizeof(double));
+        return;
+    }
+    SpiceDouble vin[3] = {in[0], in[1], in[2]};
+    SpiceDouble vout[3];
+    mxv_c(rot, vin, vout);
+    out[0] = vout[0]; out[1] = vout[1]; out[2] = vout[2];
+#else
+    memcpy(out, in, 3 * sizeof(double));
+#endif
+}
+
 static void xyz_to_latlon_alt(const double pos[3], double *lat_deg, double *lon_deg, double *alt_km) {
     double r = sqrt(pos[0]*pos[0] + pos[1]*pos[1] + pos[2]*pos[2]);
     if (r < 1e-9) {
@@ -62,8 +91,12 @@ static void xyz_to_latlon_alt(const double pos[3], double *lat_deg, double *lon_
         return;
     }
     *lat_deg = r2d(asin(clamp3b(pos[2] / r, -1.0, 1.0)));
-    *lon_deg = r2d(atan2(pos[1], pos[0]));
-    *alt_km = r - R_MOON_KM;
+    double rho = sqrt(pos[0] * pos[0] + pos[1] * pos[1]);
+    *lon_deg = (rho < 1e-6) ? 0.0 : r2d(atan2(pos[1], pos[0]));
+    /* Butun 3B alt_km alanlari yerel sentetik zemine gore AGL'dir. Boylece uzay araci
+       durumu ve trajectory[0] ayni referansi kullanir; temas aninda 0 olur. */
+    double ground_m = sample_synthetic_dem_elevation_m(*lat_deg, *lon_deg);
+    *alt_km = r - (R_MOON_KM + ground_m / 1000.0);
 }
 
 static void vec_normalize(double v[3]) {
@@ -273,10 +306,12 @@ static void populate_spice_universe(const char *utc, Moon3BScene *out) {
             helio_km[1] - out->moon_helio_km[1],
             helio_km[2] - out->moon_helio_km[2]
         };
+        double moon_rel_moonfixed[3];
+        rotate_approx_helio_to_moonfixed(moon_rel_km, utc, moon_rel_moonfixed);
 
         add_spice_body(
             out, HELIO_CATALOG[i].naif_id, HELIO_CATALOG[i].name, HELIO_CATALOG[i].cat, "SUN",
-            false, moon_rel_km, helio_km, HELIO_CATALOG[i].radius_km,
+            false, moon_rel_moonfixed, helio_km, HELIO_CATALOG[i].radius_km,
             a_km, HELIO_CATALOG[i].ecc, HELIO_CATALOG[i].inc_deg, cur_phase, HELIO_CATALOG[i].period_days,
             MU_SUN_KM3_S2, HELIO_CATALOG[i].hex
         );
@@ -360,10 +395,37 @@ static double topo_elevation_deg(const double up[3], const double body_km[3]) {
     return r2d(asin(clamp3b(vec_dot(v, up) / len, -1.0, 1.0)));
 }
 
+static double topo_azimuth_deg(double lat_deg, double lon_deg, const double body_km[3]) {
+    double lat_r = d2r(lat_deg);
+    double lon_r = d2r(lon_deg);
+    double up[3] = {cos(lat_r) * cos(lon_r), cos(lat_r) * sin(lon_r), sin(lat_r)};
+    double east[3] = {-sin(lon_r), cos(lon_r), 0.0};
+    double north[3] = {-sin(lat_r) * cos(lon_r), -sin(lat_r) * sin(lon_r), cos(lat_r)};
+    double v[3] = {
+        body_km[0] - R_MOON_KM * up[0],
+        body_km[1] - R_MOON_KM * up[1],
+        body_km[2] - R_MOON_KM * up[2]
+    };
+    double len = vec_len(v);
+    if (len < 1e-9) return 0.0;
+    double ve = vec_dot(v, east) / len;
+    double vn = vec_dot(v, north) / len;
+    double az = r2d(atan2(ve, vn));
+    az = fmod(az + 360.0, 360.0);
+    return az;
+}
+
 static void fill_site_physics(LunarSite3B *site, const double sun_km[3], const double earth_km[3]) {
-    site->altitude_m = sample_lola_elevation_m(site->lat_deg, site->lon_deg);
-    double h_n = sample_lola_elevation_m(clamp3b(site->lat_deg + 0.03, -90.0, 90.0), site->lon_deg);
-    double h_s = sample_lola_elevation_m(clamp3b(site->lat_deg - 0.03, -90.0, 90.0), site->lon_deg);
+    double lola_alt_m = 0.0;
+    if (lunar_lola_ground_altitude_m(site->lat_deg, site->lon_deg, &lola_alt_m)) {
+        site->altitude_m = lola_alt_m;
+        site->altitude_is_lola = true;
+    } else {
+        site->altitude_m = sample_synthetic_dem_elevation_m(site->lat_deg, site->lon_deg);
+        site->altitude_is_lola = false;
+    }
+    double h_n = sample_synthetic_dem_elevation_m(clamp3b(site->lat_deg + 0.03, -90.0, 90.0), site->lon_deg);
+    double h_s = sample_synthetic_dem_elevation_m(clamp3b(site->lat_deg - 0.03, -90.0, 90.0), site->lon_deg);
     double grad = fabs(h_n - h_s) / (2.0 * 0.03 * 30323.35);
     site->slope_deg = r2d(atan(grad));
 
@@ -399,14 +461,26 @@ void compute_3b_moon_scene(
     out->scenario_id = (scenario_id >= 1 && scenario_id <= 4) ? scenario_id : 3;
     out->mission_mode = (mission_mode >= 0 && mission_mode <= 2) ? mission_mode : MISSION_MODE_ORBIT;
     out->sim_elapsed_sec = sim_elapsed_sec;
+    snprintf(out->scene_model, sizeof(out->scene_model), "kinematic-visualization");
+    out->physics_valid = false;
 
     const char *b_utc = (base_utc && base_utc[0]) ? base_utc : "2026-10-29T14:30:00";
     snprintf(out->base_utc, sizeof(out->base_utc), "%s", b_utc);
     utc_add_seconds_double(b_utc, sim_elapsed_sec, out->active_utc, sizeof(out->active_utc));
-    out->range_days = (range_days > 0 && range_days <= 30) ? range_days : 14;
+    out->range_days = (range_days < 1) ? 1 : (range_days > 30 ? 30 : range_days);
+
+    snprintf(out->frame, sizeof(out->frame), "IAU_MOON");
+    snprintf(out->helio_model, sizeof(out->helio_model), "ANALYTIC_KEPLER");
+    snprintf(out->trajectory_phase, sizeof(out->trajectory_phase), "POST_BURN_DESCENT");
+    out->terrain_is_synthetic = true;
 
     // 1. Tüm Evreni tam `active_utc` (base_utc + sim_elapsed_sec) anında hesapla
     populate_spice_universe(out->active_utc, out);
+    snprintf(out->ephemeris_source, sizeof(out->ephemeris_source), "%s",
+             (out->body_count >= 2 && out->bodies[0].from_spice_kernel &&
+              out->bodies[1].from_spice_kernel)
+                 ? "CSPICE_DE440S_IAU_MOON"
+                 : "ANALYTIC_MEEUS_FALLBACK");
 
     static const struct { const char *name; double lat, lon; } PRESETS[] = {
         {"Shackleton Rim",        -89.7668, -171.87},
@@ -427,14 +501,41 @@ void compute_3b_moon_scene(
         fill_site_physics(&out->sites[i], out->bodies[0].pos_moon_km, out->bodies[1].pos_moon_km);
     }
 
-    snprintf(out->selected_site.name, sizeof(out->selected_site.name), "%s",
-             (target_name && target_name[0]) ? target_name : "Connecting Ridge");
-    out->selected_site.lat_deg = clamp3b(target_lat, -90.0, 90.0);
-    out->selected_site.lon_deg = target_lon;
-    out->selected_site.is_custom = target_is_custom;
+    const char *sel_name = (target_name && target_name[0]) ? target_name : "Connecting Ridge";
+    double sel_lat = clamp3b(target_lat, -90.0, 90.0);
+    double sel_lon = wrap_lon3b(target_lon);
+    bool matches_preset = false;
+    for (int i = 0; i < n_presets; i++) {
+        if (strcmp(sel_name, PRESETS[i].name) == 0 &&
+            fabs(sel_lat - PRESETS[i].lat) < 1e-4 &&
+            fabs(sel_lon - PRESETS[i].lon) < 1e-4) {
+            matches_preset = true;
+            break;
+        }
+    }
+    bool effective_custom = target_is_custom || !matches_preset;
+
+    snprintf(out->selected_site.name, sizeof(out->selected_site.name), "%s", sel_name);
+    out->selected_site.lat_deg = sel_lat;
+    out->selected_site.lon_deg = sel_lon;
+    out->selected_site.is_custom = effective_custom;
     fill_site_physics(&out->selected_site, out->bodies[0].pos_moon_km, out->bodies[1].pos_moon_km);
 
-    if (target_is_custom && out->site_count < MOON3B_MAX_SITES) {
+    // Ufuk maskesi: 2D cekirdekle ayni kaynak (LOLA profili veya sentetik arazi).
+    lunar_compute_horizon_mask(out->selected_site.lat_deg, out->selected_site.lon_deg,
+        out->selected_site.altitude_m, out->horizon_mask_deg,
+        out->horizon_source, sizeof(out->horizon_source));
+    double s_az = topo_azimuth_deg(out->selected_site.lat_deg, out->selected_site.lon_deg, out->bodies[0].pos_moon_km);
+    double e_az = topo_azimuth_deg(out->selected_site.lat_deg, out->selected_site.lon_deg, out->bodies[1].pos_moon_km);
+    int s_idx = ((int)lround(s_az)) % 360; if (s_idx < 0) s_idx += 360;
+    int e_idx = ((int)lround(e_az)) % 360; if (e_idx < 0) e_idx += 360;
+    out->sun_horizon_deg = out->horizon_mask_deg[s_idx];
+    out->earth_horizon_deg = out->horizon_mask_deg[e_idx];
+    double sun_frac_now = clamp3b((out->selected_site.sun_el_deg - out->sun_horizon_deg + 0.2666) / (2.0 * 0.2666), 0.0, 1.0);
+    out->sun_visible = (sun_frac_now > 0.25);
+    out->earth_visible = (out->selected_site.earth_el_deg > out->earth_horizon_deg);
+
+    if (effective_custom && out->site_count < MOON3B_MAX_SITES) {
         out->sites[out->site_count++] = out->selected_site;
     }
 
@@ -445,7 +546,7 @@ void compute_3b_moon_scene(
     sc->burn_elapsed_sec = fmax(0.0, burn_elapsed_sec);
 
     double init_lat = clamp3b(sc_lat, -90.0, 90.0);
-    double init_lon = sc_lon;
+    double init_lon = wrap_lon3b(sc_lon);
     double init_alt = clamp3b(sc_alt_km, 15.0, 2000.0);
     double r_orbit_km = R_MOON_KM + init_alt;
 
@@ -593,7 +694,9 @@ void compute_3b_moon_scene(
         memcpy(tp->pos_km, pos, sizeof(tp->pos_km));
         memcpy(tp->vel_kms, vel, sizeof(tp->vel_kms));
         tp->speed_kms = vec_len(vel);
-        tp->altitude_km = fmax(0.0, vec_len(pos) - target_r_km);
+        double tlat, tlon, talt;
+        xyz_to_latlon_alt(pos, &tlat, &tlon, &talt);
+        tp->altitude_km = fmax(0.0, talt);
         tp->gravity_ms2 = vec_len(grav) * 1000.0;
         tp->thrust_ms2 = vec_len(thrust) * 1000.0;
 
@@ -627,10 +730,23 @@ void compute_3b_moon_scene(
     double guidance_miss_m = vec_len(miss_vec) * 1000.0;
     total_dv_km_s += vec_len(vel);
 
-    /* Gorsellestirme icin son nokta hedefe sabitlenir (asagidaki rapor hesaplanan sapmayi verir). */
-    memcpy(out->trajectory[MOON3B_TRAJ_POINTS - 1].pos_km, target_xyz, sizeof(target_xyz));
-    out->trajectory[MOON3B_TRAJ_POINTS - 1].altitude_km = 0.0;
-    out->trajectory[MOON3B_TRAJ_POINTS - 1].speed_kms = 0.0012;
+    /* Gorsellestirme icin son nokta hedefe sabitlenir (asagidaki rapor hesaplanan sapmayi verir).
+       Hiz vektoru de raporlanan temas hiziyle ayni buyukluge getirilir; aksi halde
+       speed_kms=0.0012 iken |vel_kms| ~1.8 km/s gibi celiskili gorunur. */
+    TrajectoryPoint3B *last_tp = &out->trajectory[MOON3B_TRAJ_POINTS - 1];
+    const double landing_speed_km_s = 0.0012;
+    memcpy(last_tp->pos_km, target_xyz, sizeof(target_xyz));
+    last_tp->altitude_km = 0.0;
+    last_tp->thrust_ms2 = 0.0;
+    double last_vnorm = vec_len(last_tp->vel_kms);
+    if (last_vnorm > 1e-12) {
+        for (int k = 0; k < 3; k++) {
+            last_tp->vel_kms[k] = last_tp->vel_kms[k] / last_vnorm * landing_speed_km_s;
+        }
+    } else {
+        memset(last_tp->vel_kms, 0, sizeof(last_tp->vel_kms));
+    }
+    last_tp->speed_kms = landing_speed_km_s;
 
     // 4. Uydunun O Saniyedeki Kesin Anlık Konumu (ORBIT / DESCENT / LANDED)
     if (out->mission_mode == MISSION_MODE_ORBIT) {
@@ -707,39 +823,60 @@ void compute_3b_moon_scene(
         double s_el = topo_elevation_deg(site_up, landing_env.bodies[0].pos_moon_km) + r2d(micro_rad) * 0.1;
         double e_el = topo_elevation_deg(site_up, landing_env.bodies[1].pos_moon_km) - r2d(micro_rad) * 0.05;
 
+        double s_az_l = topo_azimuth_deg(out->selected_site.lat_deg, out->selected_site.lon_deg, landing_env.bodies[0].pos_moon_km);
+        double e_az_l = topo_azimuth_deg(out->selected_site.lat_deg, out->selected_site.lon_deg, landing_env.bodies[1].pos_moon_km);
+        int s_li = ((int)lround(s_az_l)) % 360; if (s_li < 0) s_li += 360;
+        int e_li = ((int)lround(e_az_l)) % 360; if (e_li < 0) e_li += 360;
+        double sun_hor = out->horizon_mask_deg[s_li];
+        double earth_hor = out->horizon_mask_deg[e_li];
+
         ls->sun_el_deg = s_el;
         ls->earth_el_deg = e_el;
-        ls->sun_illumination_pct = clamp3b(((s_el + 0.2666) / 0.5332) * 100.0, 0.0, 100.0);
-        ls->sun_visible = (ls->sun_illumination_pct > 15.0);
-        ls->dte_connected = (e_el > 0.0);
-        ls->surface_temp_k = ls->sun_visible ? (215.0 + 95.0 * (ls->sun_illumination_pct / 100.0)) : 68.0;
+        ls->sun_disk_illuminated_pct = clamp3b(((s_el + 0.2666) / 0.5332) * 100.0, 0.0, 100.0);
+        double sun_frac_l = clamp3b((s_el - sun_hor + 0.2666) / (2.0 * 0.2666), 0.0, 1.0);
+        ls->sun_visible = (sun_frac_l > 0.25);
+        ls->dte_connected = (e_el > earth_hor);
+        ls->surface_temp_k = ls->sun_visible ? (215.0 + 95.0 * (ls->sun_disk_illuminated_pct / 100.0)) : 68.0;
     }
 
     const LandingSecondSample *td = &out->landing_samples[30];
     TouchdownReport3B *rep = &out->touchdown_report;
-    rep->success = true;
-    snprintf(rep->status_label, sizeof(rep->status_label), "BAŞARILI YUMUŞAK İNİŞ");
+    // Kinematik gorselleştirme modeli: gercek arazi/itu motoru dogrulamasi yoktur.
+    // success yalnizca "gudum yasasi hedefe yeterince yaklasti" anlamini tasir; fizik gecerliligi degildir.
+    rep->success = (guidance_miss_m <= 50.0);
+    snprintf(rep->status_label, sizeof(rep->status_label), "%s",
+             rep->success ? "KİNEMATİK İNİŞ (FİZİKSEL DOĞRULAMA YOK)"
+                          : "KİNEMATİK İNİŞ (HEDEF DIŞI)");
+    snprintf(rep->model, sizeof(rep->model), "kinematic-visualization");
+    rep->physics_valid = false;
     snprintf(rep->touchdown_utc, sizeof(rep->touchdown_utc), "%s", out->landing_utc);
     rep->flight_duration_sec = sc->transfer_time_sec;
     rep->miss_distance_m = guidance_miss_m;   /* entegrasyondan hesaplanan, sabitleme oncesi sapma */
-    rep->touchdown_speed_ms = 1.20;           /* TASARIM HEDEFI: simule edilmis bir deger degildir */
+    rep->trajectory_snapped_to_target = true;
+    rep->touchdown_speed_ms = last_tp->speed_kms * 1000.0;
     rep->total_dv_used_ms = total_dv_km_s * 1000.0;
-    rep->sun_illumination_pct = td->sun_illumination_pct;
+    rep->sun_disk_illuminated_pct = td->sun_disk_illuminated_pct;
+    rep->sun_visible = td->sun_visible;
     rep->earth_el_deg = td->earth_el_deg;
     rep->dte_connected = td->dte_connected;
     rep->surface_temp_k = td->surface_temp_k;
-    int score = 96 - (int)(out->selected_site.slope_deg * 1.5);
-    if (!td->dte_connected) score -= 18;
-    if (!td->sun_visible) score -= 15;
-    rep->mission_score = (int)clamp3b((double)score, 40.0, 99.0);
 }
 
 static void write_esc(FILE *fp, const char *s) {
     fputc('"', fp);
     for (const char *p = s; p && *p; p++) {
-        if (*p == '"') fputs("\\\"", fp);
-        else if (*p == '\\') fputs("\\\\", fp);
-        else fputc(*p, fp);
+        unsigned char c = (unsigned char)*p;
+        switch (c) {
+            case '"':  fputs("\\\"", fp); break;
+            case '\\': fputs("\\\\", fp); break;
+            case '\n': fputs("\\n", fp);  break;
+            case '\r': fputs("\\r", fp);  break;
+            case '\t': fputs("\\t", fp);  break;
+            default:
+                if (c < 0x20) fprintf(fp, "\\u%04x", (unsigned)c);
+                else fputc(c, fp);
+                break;
+        }
     }
     fputc('"', fp);
 }
@@ -753,6 +890,18 @@ static void write_3b_payload(FILE *fp, const Moon3BScene *s) {
     fprintf(fp, "  \"active_utc\": "); write_esc(fp, s->active_utc); fprintf(fp, ",\n");
     fprintf(fp, "  \"landing_utc\": "); write_esc(fp, s->landing_utc); fprintf(fp, ",\n");
     fprintf(fp, "  \"range_days\": %d,\n", s->range_days);
+    fprintf(fp, "  \"scene_model\": "); write_esc(fp, s->scene_model); fprintf(fp, ",\n");
+    fprintf(fp, "  \"physics_valid\": %s,\n", s->physics_valid ? "true" : "false");
+    fprintf(fp, "  \"frame\": "); write_esc(fp, s->frame); fprintf(fp, ",\n");
+    fprintf(fp, "  \"ephemeris_source\": "); write_esc(fp, s->ephemeris_source); fprintf(fp, ",\n");
+    fprintf(fp, "  \"helio_model\": "); write_esc(fp, s->helio_model); fprintf(fp, ",\n");
+    fprintf(fp, "  \"trajectory_phase\": "); write_esc(fp, s->trajectory_phase); fprintf(fp, ",\n");
+    fprintf(fp, "  \"terrain_is_synthetic\": %s,\n", s->terrain_is_synthetic ? "true" : "false");
+    fprintf(fp, "  \"horizon_source\": "); write_esc(fp, s->horizon_source); fprintf(fp, ",\n");
+    fprintf(fp, "  \"sun_visible\": %s,\n", s->sun_visible ? "true" : "false");
+    fprintf(fp, "  \"earth_visible\": %s,\n", s->earth_visible ? "true" : "false");
+    fprintf(fp, "  \"sun_horizon_deg\": %.2f,\n", s->sun_horizon_deg);
+    fprintf(fp, "  \"earth_horizon_deg\": %.2f,\n", s->earth_horizon_deg);
 
     fprintf(fp, "  \"sun\": { \"vec\": [%.5f, %.5f, %.5f], \"sub_lat\": %.2f, \"sub_lon\": %.2f, \"helio_km\": [%.1f, %.1f, %.1f] },\n",
             s->sun_vec[0], s->sun_vec[1], s->sun_vec[2], s->sun_sub_lat_deg, s->sun_sub_lon_deg,
@@ -783,8 +932,9 @@ static void write_3b_payload(FILE *fp, const Moon3BScene *s) {
     fprintf(fp, "  ],\n");
 
     fprintf(fp, "  \"selected_site\": {\"name\": "); write_esc(fp, s->selected_site.name);
-    fprintf(fp, ", \"lat\": %.4f, \"lon\": %.4f, \"alt_m\": %.1f, \"slope_deg\": %.2f, \"sun_el\": %.2f, \"earth_el\": %.2f, \"is_custom\": %s},\n",
+    fprintf(fp, ", \"lat\": %.4f, \"lon\": %.4f, \"alt_m\": %.1f, \"alt_source\": \"%s\", \"slope_deg\": %.2f, \"sun_el\": %.2f, \"earth_el\": %.2f, \"is_custom\": %s},\n",
             s->selected_site.lat_deg, s->selected_site.lon_deg, s->selected_site.altitude_m,
+            s->selected_site.altitude_is_lola ? "LOLA_80M" : "SYNTHETIC_DEM",
             s->selected_site.slope_deg, s->selected_site.sun_el_deg, s->selected_site.earth_el_deg,
             s->selected_site.is_custom ? "true" : "false");
 
@@ -792,9 +942,10 @@ static void write_3b_payload(FILE *fp, const Moon3BScene *s) {
     for (int i = 0; i < s->site_count; i++) {
         const LunarSite3B *st = &s->sites[i];
         fprintf(fp, "    {\"name\": "); write_esc(fp, st->name);
-        fprintf(fp, ", \"lat\": %.4f, \"lon\": %.4f, \"alt_m\": %.1f, \"slope_deg\": %.2f, \"sun_el\": %.2f, \"earth_el\": %.2f, \"is_custom\": %s}%s\n",
-                st->lat_deg, st->lon_deg, st->altitude_m, st->slope_deg,
-                st->sun_el_deg, st->earth_el_deg, st->is_custom ? "true" : "false",
+        fprintf(fp, ", \"lat\": %.4f, \"lon\": %.4f, \"alt_m\": %.1f, \"alt_source\": \"%s\", \"slope_deg\": %.2f, \"sun_el\": %.2f, \"earth_el\": %.2f, \"is_custom\": %s}%s\n",
+                st->lat_deg, st->lon_deg, st->altitude_m,
+                st->altitude_is_lola ? "LOLA_80M" : "SYNTHETIC_DEM",
+                st->slope_deg, st->sun_el_deg, st->earth_el_deg, st->is_custom ? "true" : "false",
                 (i + 1 < s->site_count) ? "," : "");
     }
     fprintf(fp, "  ],\n");
@@ -803,13 +954,13 @@ static void write_3b_payload(FILE *fp, const Moon3BScene *s) {
     fprintf(fp, "  \"spacecraft\": {\n");
     fprintf(fp, "    \"mission_mode\": %d, \"sim_elapsed_sec\": %.3f, \"burn_elapsed_sec\": %.3f,\n",
             sc->mission_mode, sc->sim_elapsed_sec, sc->burn_elapsed_sec);
-    fprintf(fp, "    \"lat\": %.4f, \"lon\": %.4f, \"altitude_km\": %.2f, \"initial_speed_kms\": %.4f, \"current_speed_kms\": %.4f,\n",
+    fprintf(fp, "    \"lat\": %.4f, \"lon\": %.4f, \"altitude_km\": %.2f, \"initial_speed_kms\": %.6f, \"current_speed_kms\": %.6f,\n",
             sc->lat_deg, sc->lon_deg, sc->altitude_km, sc->initial_speed_kms, sc->current_speed_kms);
     fprintf(fp, "    \"pos_km\": [%.2f, %.2f, %.2f],\n", sc->pos_km[0], sc->pos_km[1], sc->pos_km[2]);
-    fprintf(fp, "    \"vel_kms\": [%.4f, %.4f, %.4f],\n", sc->vel_kms[0], sc->vel_kms[1], sc->vel_kms[2]);
+    fprintf(fp, "    \"vel_kms\": [%.6f, %.6f, %.6f],\n", sc->vel_kms[0], sc->vel_kms[1], sc->vel_kms[2]);
     fprintf(fp, "    \"gravity_ms2\": %.3f, \"thrust_ms2\": %.3f,\n", sc->gravity_ms2, sc->thrust_ms2);
-    fprintf(fp, "    \"nominal_orbital_speed_kms\": %.4f,\n", sc->nominal_orbital_speed_kms);
-    fprintf(fp, "    \"escape_speed_kms\": %.4f,\n", sc->escape_speed_kms);
+    fprintf(fp, "    \"nominal_orbital_speed_kms\": %.6f,\n", sc->nominal_orbital_speed_kms);
+    fprintf(fp, "    \"escape_speed_kms\": %.6f,\n", sc->escape_speed_kms);
     fprintf(fp, "    \"orbital_period_sec\": %.1f,\n", sc->orbital_period_sec);
     fprintf(fp, "    \"deorbit_dv_ms\": %.1f,\n", sc->deorbit_dv_ms);
     fprintf(fp, "    \"transfer_time_sec\": %.1f,\n", sc->transfer_time_sec);
@@ -829,7 +980,7 @@ static void write_3b_payload(FILE *fp, const Moon3BScene *s) {
     fprintf(fp, "  \"trajectory\": [\n");
     for (int i = 0; i < s->traj_count; i++) {
         const TrajectoryPoint3B *tp = &s->trajectory[i];
-        fprintf(fp, "    {\"step\": %d, \"t_sec\": %.1f, \"pos_km\": [%.2f, %.2f, %.2f], \"vel_kms\": [%.4f, %.4f, %.4f], \"speed_kms\": %.4f, \"alt_km\": %.2f, \"gravity_ms2\": %.3f, \"thrust_ms2\": %.3f}%s\n",
+        fprintf(fp, "    {\"step\": %d, \"t_sec\": %.1f, \"pos_km\": [%.2f, %.2f, %.2f], \"vel_kms\": [%.6f, %.6f, %.6f], \"speed_kms\": %.6f, \"alt_km\": %.2f, \"gravity_ms2\": %.3f, \"thrust_ms2\": %.3f}%s\n",
                 tp->step, tp->t_sec, tp->pos_km[0], tp->pos_km[1], tp->pos_km[2],
                 tp->vel_kms[0], tp->vel_kms[1], tp->vel_kms[2],
                 tp->speed_kms, tp->altitude_km, tp->gravity_ms2, tp->thrust_ms2,
@@ -840,9 +991,9 @@ static void write_3b_payload(FILE *fp, const Moon3BScene *s) {
     fprintf(fp, "  \"landing_seconds\": [\n");
     for (int i = 0; i < s->landing_sample_count; i++) {
         const LandingSecondSample *ls = &s->landing_samples[i];
-        fprintf(fp, "    {\"offset_sec\": %d, \"utc\": \"%s\", \"phase\": \"%s\", \"alt_m\": %.1f, \"vz_ms\": %.2f, \"sun_el\": %.2f, \"sun_pct\": %.1f, \"earth_el\": %.2f, \"dte\": %s, \"sun_vis\": %s, \"temp_k\": %.1f}%s\n",
+        fprintf(fp, "    {\"offset_sec\": %d, \"utc\": \"%s\", \"phase\": \"%s\", \"alt_m\": %.1f, \"vz_ms\": %.2f, \"sun_el\": %.2f, \"sun_disk_pct\": %.1f, \"earth_el\": %.2f, \"dte\": %s, \"sun_vis\": %s, \"temp_k\": %.1f}%s\n",
                 ls->offset_sec, ls->utc, ls->phase, ls->altitude_m, ls->vertical_speed_ms,
-                ls->sun_el_deg, ls->sun_illumination_pct, ls->earth_el_deg,
+                ls->sun_el_deg, ls->sun_disk_illuminated_pct, ls->earth_el_deg,
                 ls->dte_connected ? "true" : "false",
                 ls->sun_visible ? "true" : "false",
                 ls->surface_temp_k,
@@ -854,11 +1005,15 @@ static void write_3b_payload(FILE *fp, const Moon3BScene *s) {
     fprintf(fp, "  \"touchdown_report\": {\n");
     fprintf(fp, "    \"success\": %s, \"status_label\": ", rep->success ? "true" : "false");
     write_esc(fp, rep->status_label);
+    fprintf(fp, ", \"model\": "); write_esc(fp, rep->model);
+    fprintf(fp, ", \"physics_valid\": %s", rep->physics_valid ? "true" : "false");
     fprintf(fp, ", \"touchdown_utc\": "); write_esc(fp, rep->touchdown_utc);
-    fprintf(fp, ", \"flight_duration_sec\": %.1f, \"miss_distance_m\": %.2f, \"touchdown_speed_ms\": %.2f, \"total_dv_used_ms\": %.1f, \"sun_illumination_pct\": %.1f, \"earth_el_deg\": %.2f, \"dte_connected\": %s, \"surface_temp_k\": %.1f, \"mission_score\": %d, \"guidance_model\": \"KINEMATIC_VISUALISATION_NO_MASS_MODEL\"\n",
-            rep->flight_duration_sec, rep->miss_distance_m, rep->touchdown_speed_ms,
-            rep->total_dv_used_ms, rep->sun_illumination_pct, rep->earth_el_deg,
-            rep->dte_connected ? "true" : "false", rep->surface_temp_k, rep->mission_score);
+    fprintf(fp, ", \"flight_duration_sec\": %.1f, \"miss_distance_m\": %.2f, \"trajectory_snapped_to_target\": %s, \"touchdown_speed_ms\": %.2f, \"total_dv_used_ms\": %.1f, \"sun_disk_illuminated_pct\": %.1f, \"sun_visible\": %s, \"earth_el_deg\": %.2f, \"dte_connected\": %s, \"surface_temp_k\": %.1f, \"guidance_model\": \"KINEMATIC_VISUALISATION_NO_MASS_MODEL\"\n",
+            rep->flight_duration_sec, rep->miss_distance_m,
+            rep->trajectory_snapped_to_target ? "true" : "false", rep->touchdown_speed_ms,
+            rep->total_dv_used_ms, rep->sun_disk_illuminated_pct, rep->sun_visible ? "true" : "false",
+            rep->earth_el_deg,
+            rep->dte_connected ? "true" : "false", rep->surface_temp_k);
     fprintf(fp, "  }\n");
     fprintf(fp, "}");
 }
@@ -883,4 +1038,16 @@ bool export_3b_scene_json(const char *json_path, const char *js_path, const Moon
         }
     }
     return true;
+}
+
+char *export_3b_scene_json_string(const Moon3BScene *scene) {
+    if (!scene) return NULL;
+    char *buf = NULL;
+    size_t sz = 0;
+    FILE *fp = open_memstream(&buf, &sz);
+    if (!fp) return NULL;
+    write_3b_payload(fp, scene);
+    fprintf(fp, "\n");
+    fclose(fp);
+    return buf;
 }

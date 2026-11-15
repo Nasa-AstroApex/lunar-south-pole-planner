@@ -10,6 +10,7 @@
  *   - Yeni 2D alanı gerekiyorsa ui-starter/src/types/mission.ts ile birlikte güncelle.
  * Ayrıntı: AGENTS.md ve docs/FRONTEND_GUIDE.md.
  */
+#define _POSIX_C_SOURCE 200809L
 #include "cspice_math.h"
 #include "lola_horizons.h"
 #include <dirent.h>
@@ -34,9 +35,9 @@
 #define SOLAR_RADIUS_DEG  0.2666   // Güneş açısal yarıçapı (~0.533° disk çapı)
 #define METERS_PER_DEG    30323.35 // Ay yüzeyinde 1 derece yay (metre)
 
-#if HAS_NAIF_CSPICE
 static bool g_spice_loaded = false;
 
+#if HAS_NAIF_CSPICE
 static bool has_spice_ext(const char *name) {
     const char *dot = strrchr(name, '.');
     if (!dot) return false;
@@ -109,6 +110,12 @@ double lunar_utc_to_et(const char *utc) {
     long jdn = d + (153 * m2 + 2) / 5 + 365L * y2 + y2 / 4 - y2 / 100 + y2 / 400 - 32045;
     double jd = (double)jdn + (h - 12.0) / 24.0 + mi / 1440.0 + s / 86400.0;
     return (jd - 2451545.0) * 86400.0 + 69.184;
+}
+
+static inline double wrap_lon_deg(double lon) {
+    double x = fmod(lon + 180.0, 360.0);
+    if (x < 0.0) x += 360.0;
+    return x - 180.0;
 }
 
 static inline double clamp_d(double v, double lo, double hi) {
@@ -325,16 +332,47 @@ bool init_spice_engine(const char *meta_kernel_path) {
     int dir_loaded = autoload_kernels_dir("data/kernels", 0);
     if (dir_loaded == 0) dir_loaded = autoload_kernels_dir("kernels", 0);
     loaded_count += dir_loaded;
-    g_spice_loaded = (loaded_count > 0);
+
+    SpiceInt spk_count = 0;
+    ktotal_c("SPK", &spk_count);
+    if (failed_c()) reset_c();
+
+    SpiceInt radii_dim = 3;
+    SpiceDouble moon_radii[3];
+    bodvcd_c(301, "RADII", 3, &radii_dim, moon_radii);
+    bool has_pck = !failed_c();
+    if (!has_pck) reset_c();
+
+    SpiceBoolean has_lsk = SPICEFALSE;
+    SpiceInt lsk_count = 0;
+    SpiceChar dtype[4];
+    dtpool_c("DELTET/DELTA_AT", &has_lsk, &lsk_count, dtype);
+    if (failed_c()) {
+        reset_c();
+        has_lsk = SPICEFALSE;
+    }
+
+    g_spice_loaded = (loaded_count > 0 && spk_count > 0 &&
+                      has_pck && has_lsk == SPICETRUE);
+    if (!g_spice_loaded) {
+        fprintf(stderr,
+                "[HATA] CSPICE kernel seti eksik (SPK=%d, PCK=%s, LSK=%s). "
+                "data/kernels/ altinda de440s.bsp, pck00010.tpc ve naif0012.tls bulunmali.\n",
+                (int)spk_count, has_pck ? "var" : "yok",
+                has_lsk == SPICETRUE ? "var" : "yok");
+    }
 #else
     (void)meta_kernel_path;
+    fprintf(stderr,
+            "[HATA] CSPICE destegi derlenmedi. cspice/ dizinini kurup yeniden derleyin.\n");
+    g_spice_loaded = false;
 #endif
-    return true;
+    return g_spice_loaded;
 }
 
 /* SENTETIK ARAZI: sinus harmonikleri + elle girilmis tepe/cukur noktalari. Gercek LOLA DEM degildir;
    egim, rover rotasi ve LOLA profili olmayan noktalarin ufku bu modele dayanir. */
-double sample_lola_elevation_m(double lat_deg, double lon_deg) {
+double sample_synthetic_dem_elevation_m(double lat_deg, double lon_deg) {
     double lat_r = deg2rad(lat_deg);
     double lon_r = deg2rad(lon_deg);
 
@@ -361,10 +399,10 @@ double sample_lola_elevation_m(double lat_deg, double lon_deg) {
 static void compute_local_slope_aspect(double lat_deg, double lon_deg, double *out_slope, double *out_aspect) {
     const double d = 0.04;
     double cos_lat = fmax(0.05, cos(deg2rad(lat_deg)));
-    double h_n = sample_lola_elevation_m(clamp_d(lat_deg + d, -90.0, 90.0), lon_deg);
-    double h_s = sample_lola_elevation_m(clamp_d(lat_deg - d, -90.0, 90.0), lon_deg);
-    double h_e = sample_lola_elevation_m(lat_deg, lon_deg + d / cos_lat);
-    double h_w = sample_lola_elevation_m(lat_deg, lon_deg - d / cos_lat);
+    double h_n = sample_synthetic_dem_elevation_m(clamp_d(lat_deg + d, -90.0, 90.0), lon_deg);
+    double h_s = sample_synthetic_dem_elevation_m(clamp_d(lat_deg - d, -90.0, 90.0), lon_deg);
+    double h_e = sample_synthetic_dem_elevation_m(lat_deg, lon_deg + d / cos_lat);
+    double h_w = sample_synthetic_dem_elevation_m(lat_deg, lon_deg - d / cos_lat);
 
     double dz_dy = (h_n - h_s) / (2.0 * d * METERS_PER_DEG);
     double dz_dx = (h_e - h_w) / (2.0 * d * METERS_PER_DEG);
@@ -399,7 +437,7 @@ static void compute_360_horizon_and_blocker(
             double lat2 = asin(clamp_d(sin_lat2, -1.0, 1.0));
             double lon2 = lon_r + atan2(sin(az_r) * sin_d * cos(lat_r), cos_d - sin(lat_r) * sin_lat2);
 
-            double target_h = sample_lola_elevation_m(rad2deg(lat2), rad2deg(lon2));
+            double target_h = sample_synthetic_dem_elevation_m(rad2deg(lat2), rad2deg(lon2));
             double curvature_drop_m = (dist_km * dist_km * 1000.0) / (2.0 * R_MOON_KM);
             double el_deg = rad2deg(atan2((target_h - curvature_drop_m) - (obs_alt_m + 2.5), dist_km * 1000.0));
 
@@ -451,6 +489,13 @@ static const LolaHorizonProfile *find_lola_profile(double lat_deg, double lon_de
     return NULL;
 }
 
+bool lunar_lola_ground_altitude_m(double lat_deg, double lon_deg, double *alt_m) {
+    const LolaHorizonProfile *lp = find_lola_profile(lat_deg, lon_deg);
+    if (!lp) return false;
+    if (alt_m) *alt_m = lp->ground_m;
+    return true;
+}
+
 /* Ufuk maskesi: varsa gercek LOLA profili (true doner, *alt_m LOLA zemin yuksekligi olur),
    yoksa sentetik arazi uzerinde isin izleme (false doner). */
 static bool site_horizon(
@@ -479,13 +524,28 @@ static bool site_horizon(
     return true;
 }
 
+/* 360 derecelik ufuk maskesini (her derece icin ufuk yukseklik acisi, derece) hesaplar.
+   Gercek LOLA profili varsa onu kullanir; yoksa sentetik arazi uzerinde isin izleme yapar.
+   horizon_source cagiranin tamponuna yazilir. 2D ve 3B ayni fonksiyonu paylasir. */
+void lunar_compute_horizon_mask(double lat_deg, double lon_deg, double alt_m,
+                                double mask_out[CSPICE_HORIZON_RAYS], char *horizon_source, size_t src_sz) {
+    double alt = alt_m;
+    double b_az = 0.0, b_d = 0.0, b_el = 0.0;
+    bool is_lola = site_horizon(lat_deg, lon_deg, &alt, mask_out, &b_az, &b_d, &b_el);
+    if (horizon_source) {
+        snprintf(horizon_source, src_sz, "%s", is_lola ? "LOLA_80M_SKYLINE" : "SYNTHETIC_ANALYTIC");
+    }
+}
+
 typedef struct {
     double total_sun_h;
     double sun_pct;
     double longest_sun_h;
+    int sun_window_count;
     double total_earth_h;
     double earth_pct;
     double longest_earth_h;
+    int earth_window_count;
     double overlap_h;
     double loss_pct;
     double longest_dark_h;
@@ -508,6 +568,8 @@ static void simulate_window_metrics(
 
     int sun_win_start = -1;
     int earth_win_start = -1;
+    int sun_win_count = 0;
+    int earth_win_count = 0;
     if (full_target) {
         full_target->sun_window_count = 0;
         full_target->earth_window_count = 0;
@@ -534,13 +596,18 @@ static void simulate_window_metrics(
         sun_frac_sum += sun_frac;
         if (dte_ok) dte_vis_hours++;
         if (sun_ok && dte_ok) overlap_h += 1.0;
+        /* SoC saat basindaki degeriyle raporlanir; ilk sample baslangic bataryasini gosterir. */
+        if (full_target) full_target->timeline_soc_pct[h] = soc;
 
         if (sun_ok) {
             cur_sun += 1.0;
             if (cur_sun > max_sun) max_sun = cur_sun;
             cur_dark = 0.0;
             soc = clamp_d(soc + 1.65 * sun_frac, 0.0, 100.0);
-            if (sun_win_start < 0) sun_win_start = h;
+            if (sun_win_start < 0) {
+                sun_win_start = h;
+                sun_win_count++;
+            }
         } else {
             cur_sun = 0.0;
             cur_dark += 1.0;
@@ -558,7 +625,10 @@ static void simulate_window_metrics(
         if (dte_ok) {
             cur_earth += 1.0;
             if (cur_earth > max_earth) max_earth = cur_earth;
-            if (earth_win_start < 0) earth_win_start = h;
+            if (earth_win_start < 0) {
+                earth_win_start = h;
+                earth_win_count++;
+            }
         } else {
             cur_earth = 0.0;
             if (earth_win_start >= 0 && full_target && full_target->earth_window_count < CSPICE_MAX_WINDOWS) {
@@ -579,7 +649,6 @@ static void simulate_window_metrics(
             full_target->timeline_earth_az[h] = e_az;
             full_target->timeline_earth_el[h] = e_el;
             full_target->timeline_dte_vis[h]  = dte_ok ? 1.0 : 0.0;
-            full_target->timeline_soc_pct[h]  = soc;
         }
     }
 
@@ -599,9 +668,11 @@ static void simulate_window_metrics(
     st->total_sun_h = sun_frac_sum;
     st->sun_pct = (100.0 * sun_frac_sum) / (double)total_hours;
     st->longest_sun_h = max_sun;
+    st->sun_window_count = sun_win_count;
     st->total_earth_h = (double)dte_vis_hours;
     st->earth_pct = (100.0 * dte_vis_hours) / (double)total_hours;
     st->longest_earth_h = max_earth;
+    st->earth_window_count = earth_win_count;
     st->overlap_h = overlap_h;
     double raw_pct = (100.0 * raw_sun_hours) / (double)total_hours;
     st->loss_pct = fmax(0.0, raw_pct - st->sun_pct);
@@ -627,6 +698,29 @@ static int compute_site_score(double sun_pct, double earth_pct, double slope_deg
     return (int)clamp_d(round(score), 0.0, 100.0);
 }
 
+/* Ana saha ve aday sahalar ayni esikleri kullanmali. Aksi halde 0% gunesli bir saha
+   "GO" gorunebilir. min_soc her iki yolda da batarya simülasyonundan gelir. */
+static const char *classify_site_verdict(
+    double sun_pct, double earth_pct, double slope_deg,
+    double longest_dark_h, double min_soc_pct
+) {
+    if (sun_pct < 40.0 || longest_dark_h > 120.0 ||
+        slope_deg > 12.0 || min_soc_pct < 15.0) {
+        return "NO-GO";
+    }
+    if (earth_pct < 35.0 || slope_deg > 8.0 || longest_dark_h > 72.0) {
+        return "CAUTION";
+    }
+    return "GO";
+}
+
+/* Skor ile verdict celismesin: NO-GO <= 39, CAUTION <= 69. */
+static int cap_score_to_verdict(int score, const char *verdict) {
+    if (strcmp(verdict, "NO-GO") == 0 && score > 39) return 39;
+    if (strcmp(verdict, "CAUTION") == 0 && score > 69) return 69;
+    return score;
+}
+
 static void solve_rover_astar_ice_route(
     double center_lat, double center_lon, SimulationResult *out
 ) {
@@ -650,7 +744,7 @@ static void solve_rover_astar_ice_route(
             double lo = center_lon + (c - mid) * dlon_step;
             double slp = 0.0, asp = 0.0;
             compute_local_slope_aspect(la, lo, &slp, &asp);
-            double elev = sample_lola_elevation_m(la, lo);
+            double elev = sample_synthetic_dem_elevation_m(la, lo);
 
             grid_lat[r][c] = la;
             grid_lon[r][c] = lo;
@@ -772,8 +866,8 @@ SimulationResult *run_lunar_simulation(
     snprintf(out->site_name, sizeof(out->site_name), "%s", site_name ? site_name : "Shackleton Rim");
     snprintf(out->utc_start, sizeof(out->utc_start), "%s", utc_start ? utc_start : "2026-10-18T00:00:00");
     out->lat_deg = clamp_d(lat_deg, -90.0, 90.0);
-    out->lon_deg = lon_deg;
-    out->duration_days = (duration_days < 1) ? 14 : (duration_days > 30 ? 30 : duration_days);
+    out->lon_deg = wrap_lon_deg(lon_deg);
+    out->duration_days = (duration_days < 1) ? 1 : (duration_days > 30 ? 30 : duration_days);
     out->step_seconds = 3600;
     out->dem_out_of_bounds = (out->lat_deg > -60.0);
     if (out->dem_out_of_bounds) {
@@ -803,7 +897,7 @@ SimulationResult *run_lunar_simulation(
     double base_et = lunar_utc_to_et(out->utc_start);
 
     // 1. Rakım & Eğim
-    out->altitude_m = sample_lola_elevation_m(out->lat_deg, out->lon_deg);
+    out->altitude_m = sample_synthetic_dem_elevation_m(out->lat_deg, out->lon_deg);
     compute_local_slope_aspect(out->lat_deg, out->lon_deg, &out->slope_deg, &out->aspect_deg);
 
     // 2. 360° Ray-Casting Ufuk Maskesi
@@ -812,6 +906,7 @@ SimulationResult *run_lunar_simulation(
         out->horizon_mask_deg, &out->blocker_azimuth_deg,
         &out->blocker_distance_km, &out->blocker_elevation_deg
     );
+    out->blocker_distance_known = !main_is_lola;
     snprintf(out->horizon_source, sizeof(out->horizon_source), "%s",
              main_is_lola ? "LOLA_80M_SKYLINE" : "SYNTHETIC_ANALYTIC");
     snprintf(out->dem_name, sizeof(out->dem_name), "%s",
@@ -833,6 +928,54 @@ SimulationResult *run_lunar_simulation(
     out->min_battery_soc_pct     = main_st.min_soc;
     out->ephemeris_from_spice    = g_ephem_from_spice;
 
+    // 3b. Güneş/Dünya ufuk geçişleri (sunset/earthset, sunrise/earthrise)
+    out->sun_visible_now = (out->timeline_sun_frac[0] > 0.25);
+    out->earth_visible_now = (out->timeline_dte_vis[0] > 0.5);
+    out->hours_to_sunset = -1.0;
+    out->hours_to_sunrise = -1.0;
+    out->hours_to_earthset = -1.0;
+    out->hours_to_earthrise = -1.0;
+    out->event_search_exhausted = false;
+    int n = out->timeline_count;
+    if (out->sun_visible_now) {
+        for (int h = 1; h < n; h++) {
+            if (out->timeline_sun_frac[h] <= 0.25) {
+                out->hours_to_sunset = (double)h;
+                utc_add_hours(out->utc_start, h, out->next_sunset_utc, sizeof(out->next_sunset_utc));
+                break;
+            }
+        }
+        if (out->hours_to_sunset < 0.0) out->event_search_exhausted = true;
+    } else {
+        for (int h = 1; h < n; h++) {
+            if (out->timeline_sun_frac[h] > 0.25) {
+                out->hours_to_sunrise = (double)h;
+                utc_add_hours(out->utc_start, h, out->next_sunrise_utc, sizeof(out->next_sunrise_utc));
+                break;
+            }
+        }
+        if (out->hours_to_sunrise < 0.0) out->event_search_exhausted = true;
+    }
+    if (out->earth_visible_now) {
+        for (int h = 1; h < n; h++) {
+            if (out->timeline_dte_vis[h] <= 0.5) {
+                out->hours_to_earthset = (double)h;
+                utc_add_hours(out->utc_start, h, out->next_earthset_utc, sizeof(out->next_earthset_utc));
+                break;
+            }
+        }
+        if (out->hours_to_earthset < 0.0) out->event_search_exhausted = true;
+    } else {
+        for (int h = 1; h < n; h++) {
+            if (out->timeline_dte_vis[h] > 0.5) {
+                out->hours_to_earthrise = (double)h;
+                utc_add_hours(out->utc_start, h, out->next_earthrise_utc, sizeof(out->next_earthrise_utc));
+                break;
+            }
+        }
+        if (out->hours_to_earthrise < 0.0) out->event_search_exhausted = true;
+    }
+
     // 4. Termal Denge (Kelvin) & H2O Buz Olasılığı
     double illum_frac = out->sun_illumination_pct / 100.0;
     double abs_lat = fabs(out->lat_deg);
@@ -849,11 +992,26 @@ SimulationResult *run_lunar_simulation(
                  "Yerel egim %.1f deg oldugu icin (guvenli sinir < 8.0 deg) inis araci devrilme riski tasiyor.", out->slope_deg);
     } else if (out->longest_dark_hours > 120.0 || out->min_battery_soc_pct < 15.0) {
         snprintf(out->verdict, sizeof(out->verdict), "NO-GO");
-        snprintf(out->primary_blocker_code, sizeof(out->primary_blocker_code), "CONTINUOUS_DARKNESS_EXCEEDED");
+        snprintf(out->primary_blocker_code, sizeof(out->primary_blocker_code), "%s",
+                 out->longest_dark_hours > 120.0
+                     ? "CONTINUOUS_DARKNESS_EXCEEDED"
+                     : "INSUFFICIENT_BATTERY");
+        if (main_is_lola) {
+            snprintf(out->human_reason_tr, sizeof(out->human_reason_tr),
+                     "LOLA 80 m ufuk profilindeki %.1f deg yuksek engel nedeniyle %.0f saat kesintisiz karanlik olusuyor; min batarya %%%.1f (esik >= %%15).",
+                     out->blocker_elevation_deg, out->longest_dark_hours, out->min_battery_soc_pct);
+        } else {
+            snprintf(out->human_reason_tr, sizeof(out->human_reason_tr),
+                     "%s yonunde %.1f km uzaktaki krater duvari Gunes'i %.1f deg kestigi icin %.0f saat kesintisiz karanlik olusuyor; min batarya %%%.1f (esik >= %%15).",
+                     azimuth_to_tr_direction(out->blocker_azimuth_deg), out->blocker_distance_km,
+                     out->blocker_elevation_deg, out->longest_dark_hours, out->min_battery_soc_pct);
+        }
+    } else if (out->sun_illumination_pct < 40.0) {
+        snprintf(out->verdict, sizeof(out->verdict), "NO-GO");
+        snprintf(out->primary_blocker_code, sizeof(out->primary_blocker_code), "INSUFFICIENT_SOLAR_ILLUMINATION");
         snprintf(out->human_reason_tr, sizeof(out->human_reason_tr),
-                 "%s yonunde %.1f km uzaktaki krater duvari Gunes'i %.1f deg kestigi icin %.0f saat kesintisiz karanlik ve %.0f K donma riski olusuyor.",
-                 azimuth_to_tr_direction(out->blocker_azimuth_deg), out->blocker_distance_km,
-                 out->blocker_elevation_deg, out->longest_dark_hours, out->surface_temp_k);
+                 "Gunes aydinlanmasi %%%.1f ile Artemis enerji ihtiyaci icin yetersiz (esik >= %%40).",
+                 out->sun_illumination_pct);
     } else if (out->earth_dte_pct < 35.0 || out->slope_deg > 8.0 || out->longest_dark_hours > 72.0) {
         snprintf(out->verdict, sizeof(out->verdict), "CAUTION");
         snprintf(out->primary_blocker_code, sizeof(out->primary_blocker_code), "MARGINAL_DTE_OR_SLOPE");
@@ -867,6 +1025,7 @@ SimulationResult *run_lunar_simulation(
                  "%%%.1f guneslenme, %%%.1f Dunya DTE gorusu ve %.1f deg guvenli egim ile Artemis inisine tam uygun.",
                  out->sun_illumination_pct, out->earth_dte_pct, out->slope_deg);
     }
+    out->mission_score = cap_score_to_verdict(out->mission_score, out->verdict);
 
     // 6. 5x5 km Mikro-Kaydırma Optimizasyonu
     double cos_lat = fmax(0.05, cos(deg2rad(out->lat_deg)));
@@ -887,7 +1046,7 @@ SimulationResult *run_lunar_simulation(
             compute_local_slope_aspect(cand_lat, cand_lon, &c_slp, &c_asp);
             if (c_slp > 8.0) continue;
 
-            double c_alt = sample_lola_elevation_m(cand_lat, cand_lon);
+            double c_alt = sample_synthetic_dem_elevation_m(cand_lat, cand_lon);
             double c_hor[CSPICE_HORIZON_RAYS], b_az, b_d, b_el;
             site_horizon(cand_lat, cand_lon, &c_alt, c_hor, &b_az, &b_d, &b_el);
 
@@ -935,7 +1094,7 @@ SimulationResult *run_lunar_simulation(
         snprintf(cc->site_name, sizeof(cc->site_name), "%s", TOPO_FEATURES[i].name);
         cc->latitude_deg = TOPO_FEATURES[i].lat;
         cc->longitude_deg = TOPO_FEATURES[i].lon;
-        cc->altitude_m = sample_lola_elevation_m(cc->latitude_deg, cc->longitude_deg);
+        cc->altitude_m = sample_synthetic_dem_elevation_m(cc->latitude_deg, cc->longitude_deg);
         double asp_tmp = 0.0;
         compute_local_slope_aspect(cc->latitude_deg, cc->longitude_deg, &cc->slope_deg, &asp_tmp);
 
@@ -946,13 +1105,20 @@ SimulationResult *run_lunar_simulation(
         simulate_window_metrics(cc->latitude_deg, cc->longitude_deg, 0.0, total_hours, c_hor, base_et, &cst, NULL);
         cc->illumination_percent = cst.sun_pct;
         cc->earth_visibility_percent = cst.earth_pct;
+        cc->total_sun_hours = cst.total_sun_h;
+        cc->longest_sun_hours = cst.longest_sun_h;
         cc->total_earth_hours = cst.total_earth_h;
+        cc->longest_earth_hours = cst.longest_earth_h;
+        cc->dte_window_count = cst.earth_window_count;
         cc->overlap_hours = cst.overlap_h;
         cc->longest_dark_hours = cst.longest_dark_h;
-        cc->mission_score = compute_site_score(cst.sun_pct, cst.earth_pct, cc->slope_deg, cst.longest_dark_h);
+        cc->min_battery_soc_pct = cst.min_soc;
         snprintf(cc->verdict, sizeof(cc->verdict), "%s",
-                 (cst.longest_dark_h > 120.0 || cc->slope_deg > 12.0) ? "NO-GO" :
-                 ((cst.earth_pct < 35.0 || cc->slope_deg > 8.0) ? "CAUTION" : "GO"));
+                 classify_site_verdict(cst.sun_pct, cst.earth_pct, cc->slope_deg,
+                                       cst.longest_dark_h, cst.min_soc));
+        cc->mission_score = cap_score_to_verdict(
+            compute_site_score(cst.sun_pct, cst.earth_pct, cc->slope_deg, cst.longest_dark_h),
+            cc->verdict);
     }
 
     // 10. Qwen3-0.5B RAM Modeli İçin 6 Satırlık Sıfır-Yorum Olgu Fişi
@@ -960,9 +1126,13 @@ SimulationResult *run_lunar_simulation(
     if (out->has_micro_fix) {
         snprintf(fix_line, sizeof(fix_line), "%.2f km %s yonune kay -> Gunes %%%.1f (GO)",
                  out->fix_shift_km, out->fix_direction_tr, out->fix_sun_pct);
-    } else {
+    } else if (strcmp(out->verdict, "GO") == 0) {
         snprintf(fix_line, sizeof(fix_line), "Mevcut konum korunabilir (en iyi tarih farki: %+d gun)",
                  out->best_date_offset_days);
+    } else {
+        snprintf(fix_line, sizeof(fix_line),
+                 "Mevcut konum uygun degil (karar %s); alternatif saha/tarih degerlendirilmeli (en iyi tarih farki: %+d gun)",
+                 out->verdict, out->best_date_offset_days);
     }
 
     char rover_line[160];
@@ -1004,23 +1174,30 @@ void free_simulation_result(SimulationResult *res) {
 static void json_write_escaped(FILE *fp, const char *s) {
     fputc('"', fp);
     for (const char *p = s; p && *p; p++) {
-        switch (*p) {
+        unsigned char c = (unsigned char)*p;
+        switch (c) {
             case '"':  fputs("\\\"", fp); break;
             case '\\': fputs("\\\\", fp); break;
             case '\n': fputs("\\n", fp);  break;
             case '\r': fputs("\\r", fp);  break;
             case '\t': fputs("\\t", fp);  break;
-            default:   fputc(*p, fp);     break;
+            default:
+                if (c < 0x20) fprintf(fp, "\\u%04x", (unsigned)c);
+                else fputc(c, fp);
+                break;
         }
     }
     fputc('"', fp);
 }
 
-bool export_simulation_json(const char *filepath, const SimulationResult *r) {
-    if (!r) return false;
-    FILE *fp = fopen(filepath, "w");
-    if (!fp) return false;
+static double az_json(double a) {
+    a = fmod(a, 360.0);
+    if (a < 0.0) a += 360.0;
+    if (a > 359.9995) a = 0.0;
+    return a;
+}
 
+static void write_simulation_json(FILE *fp, const SimulationResult *r) {
     fprintf(fp, "{\n");
     fprintf(fp, "  \"status\": \"SUCCESS\",\n");
     fprintf(fp, "  \"dem_out_of_bounds\": %s,\n", r->dem_out_of_bounds ? "true" : "false");
@@ -1059,8 +1236,11 @@ bool export_simulation_json(const char *filepath, const SimulationResult *r) {
     fprintf(fp, "    \"primary_blocker_code\": "); json_write_escaped(fp, r->primary_blocker_code); fprintf(fp, ",\n");
     fprintf(fp, "    \"human_reason_tr\": "); json_write_escaped(fp, r->human_reason_tr); fprintf(fp, ",\n");
     fprintf(fp, "    \"qwen_05b_prompt_facts\": "); json_write_escaped(fp, r->qwen_05b_prompt_facts); fprintf(fp, ",\n");
-    fprintf(fp, "    \"blocker_wall\": { \"azimuth_deg\": %.1f, \"distance_km\": %.1f, \"elevation_deg\": %.2f }\n",
-            r->blocker_azimuth_deg, r->blocker_distance_km, r->blocker_elevation_deg);
+    fprintf(fp, "    \"blocker_wall\": { \"azimuth_deg\": %.1f, \"distance_km\": ", r->blocker_azimuth_deg);
+    if (r->blocker_distance_known) fprintf(fp, "%.1f", r->blocker_distance_km);
+    else fprintf(fp, "null");
+    fprintf(fp, ", \"distance_known\": %s, \"elevation_deg\": %.2f }\n",
+            r->blocker_distance_known ? "true" : "false", r->blocker_elevation_deg);
     fprintf(fp, "  },\n");
 
     fprintf(fp, "  \"telemetry\": {\n");
@@ -1125,28 +1305,67 @@ bool export_simulation_json(const char *filepath, const SimulationResult *r) {
     fprintf(fp, "  \"site_comparison\": [\n");
     for (int i = 0; i < r->candidate_count; i++) {
         const CandidateComparison *c = &r->candidates[i];
-        fprintf(fp, "    {\"site_name\": \"%s\", \"latitude_deg\": %.4f, \"longitude_deg\": %.4f, \"illumination_percent\": %.1f, \"earth_visibility_percent\": %.1f, \"slope_deg\": %.1f, \"total_earth_hours\": %.1f, \"overlap_hours\": %.1f, \"longest_dark_hours\": %.1f, \"mission_score\": %d, \"verdict\": \"%s\"}%s\n",
-                c->site_name, c->latitude_deg, c->longitude_deg, c->illumination_percent,
-                c->earth_visibility_percent, c->slope_deg, c->total_earth_hours, c->overlap_hours, c->longest_dark_hours, c->mission_score, c->verdict,
+        fprintf(fp, "    {\"site_name\": \"%s\", \"latitude_deg\": %.4f, \"longitude_deg\": %.4f, \"altitude_m\": %.1f, \"illumination_percent\": %.1f, \"earth_visibility_percent\": %.1f, \"slope_deg\": %.1f, \"total_sun_hours\": %.1f, \"longest_sun_hours\": %.1f, \"total_earth_hours\": %.1f, \"longest_earth_hours\": %.1f, \"dte_window_count\": %d, \"overlap_hours\": %.1f, \"longest_dark_hours\": %.1f, \"min_battery_soc_pct\": %.1f, \"mission_score\": %d, \"verdict\": \"%s\"}%s\n",
+                c->site_name, c->latitude_deg, c->longitude_deg, c->altitude_m, c->illumination_percent,
+                c->earth_visibility_percent, c->slope_deg, c->total_sun_hours, c->longest_sun_hours,
+                c->total_earth_hours, c->longest_earth_hours, c->dte_window_count,
+                c->overlap_hours, c->longest_dark_hours, c->min_battery_soc_pct,
+                c->mission_score, c->verdict,
                 (i + 1 < r->candidate_count) ? "," : "");
     }
     fprintf(fp, "  ],\n");
+
+    fprintf(fp, "  \"events\": {\n");
+    fprintf(fp, "    \"search_exhausted\": %s,\n", r->event_search_exhausted ? "true" : "false");
+    fprintf(fp, "    \"sun\": { \"visible_now\": %s", r->sun_visible_now ? "true" : "false");
+    if (r->sun_visible_now && r->hours_to_sunset >= 0.0) {
+        fprintf(fp, ", \"next_sunset_utc\": \"%s\", \"hours_to_sunset\": %.2f", r->next_sunset_utc, r->hours_to_sunset);
+    } else if (!r->sun_visible_now && r->hours_to_sunrise >= 0.0) {
+        fprintf(fp, ", \"next_sunrise_utc\": \"%s\", \"hours_to_sunrise\": %.2f", r->next_sunrise_utc, r->hours_to_sunrise);
+    }
+    fprintf(fp, " },\n");
+    fprintf(fp, "    \"earth\": { \"visible_now\": %s", r->earth_visible_now ? "true" : "false");
+    if (r->earth_visible_now && r->hours_to_earthset >= 0.0) {
+        fprintf(fp, ", \"next_earthset_utc\": \"%s\", \"hours_to_earthset\": %.2f", r->next_earthset_utc, r->hours_to_earthset);
+    } else if (!r->earth_visible_now && r->hours_to_earthrise >= 0.0) {
+        fprintf(fp, ", \"next_earthrise_utc\": \"%s\", \"hours_to_earthrise\": %.2f", r->next_earthrise_utc, r->hours_to_earthrise);
+    }
+    fprintf(fp, " }\n");
+    fprintf(fp, "  },\n");
 
     fprintf(fp, "  \"samples\": [\n");
     for (int i = 0; i < r->timeline_count; i++) {
         char step_utc[32];
         utc_add_hours(r->utc_start, i, step_utc, sizeof(step_utc));
-        fprintf(fp, "    {\"step_index\": %d, \"utc\": \"%s\", \"sun_azimuth_deg\": %.2f, \"sun_elevation_deg\": %.2f, \"sun_frac\": %.2f, \"is_sun_visible\": %s, \"earth_azimuth_deg\": %.2f, \"earth_elevation_deg\": %.2f, \"is_earth_visible\": %s, \"soc_pct\": %.1f}%s\n",
-                i, step_utc, r->timeline_sun_az[i], r->timeline_sun_el[i], r->timeline_sun_frac[i],
+        fprintf(fp, "    {\"step_index\": %d, \"utc\": \"%s\", \"sun_azimuth_deg\": %.3f, \"sun_elevation_deg\": %.3f, \"sun_frac\": %.6f, \"is_sun_visible\": %s, \"earth_azimuth_deg\": %.3f, \"earth_elevation_deg\": %.3f, \"is_earth_visible\": %s, \"soc_pct\": %.1f}%s\n",
+                i, step_utc, az_json(r->timeline_sun_az[i]), r->timeline_sun_el[i], r->timeline_sun_frac[i],
                 (r->timeline_sun_frac[i] > 0.25) ? "true" : "false",
-                r->timeline_earth_az[i], r->timeline_earth_el[i],
+                az_json(r->timeline_earth_az[i]), r->timeline_earth_el[i],
                 (r->timeline_dte_vis[i] > 0.5) ? "true" : "false",
                 r->timeline_soc_pct[i],
                 (i + 1 < r->timeline_count) ? "," : "");
     }
     fprintf(fp, "  ]\n");
     fprintf(fp, "}\n");
+}
 
+bool export_simulation_json(const char *filepath, const SimulationResult *r) {
+    if (!r) return false;
+    FILE *fp = fopen(filepath, "w");
+    if (!fp) return false;
+    write_simulation_json(fp, r);
+    fprintf(fp, "\n");
     fclose(fp);
     return true;
+}
+
+char *export_simulation_json_string(const SimulationResult *r) {
+    if (!r) return NULL;
+    char *buf = NULL;
+    size_t sz = 0;
+    FILE *fp = open_memstream(&buf, &sz);
+    if (!fp) return NULL;
+    write_simulation_json(fp, r);
+    fclose(fp);
+    return buf;
 }

@@ -52,7 +52,7 @@ fizik motoru, sahte veri veya uydurma JSON alanı oluşmasını engellemek.
 4. `test_3b_viewer.html` bu sahneyi çizer.
 
 **Önemli:** 2D ve 3B alanları birbirine karıştırılmaz. Örneğin 2D `summary.illumination_percent`
-ile 3B `landing_seconds[].sun_illumination_pct` aynı şey değildir; her biri kendi modelinden okunur.
+ile 3B `landing_seconds[].sun_disk_pct` aynı şey değildir; her biri kendi modelinden okunur.
 
 ## 4. Build ve Çalıştırma
 
@@ -69,7 +69,7 @@ Tam pipeline ve viewer:
 lua5.4 debug_pipeline.lua
 ```
 
-`make test` yalnızca duman testidir; fizik doğrulaması değildir.
+`make test` yalnızca duman testidir; `make validate` JSON tutarlılık kontrolüdür (2D + 3B + Lua).
 
 ## 5. Gerçek HTTP API
 
@@ -78,8 +78,12 @@ Sunucu `./build/lunar_sim --serve 8080` ile çalışır.
 | İstek | Dönen veri |
 |---|---|
 | `GET /3b?mode=2&t_sec=1200&burn_sec=1200` | 3B sahne JSON'u |
-| `GET /?site=Shackleton%20Rim&lat=-89.9&lon=0&utc=2026-10-29T14:30:00&days=14` | 2D görev JSON'u |
-| `GET /3b` dışındaki diğer GET yolları | 2D görev JSON'u |
+| `GET /?site=Shackleton%20Rim&lat=-89.7668&lon=-171.87&utc=2026-10-29T14:30:00&days=14` | 2D görev JSON'u |
+| `GET /compare?utc=2026-10-29T14:30:00&days=14` | 5 sahalik karsilastirma (`site_comparison`) |
+| `GET /3b` ve `/compare` dışındaki diğer GET yolları | 2D görev JSON'u |
+
+`/compare` ve `/` yanıtları istek başına bellekte üretilir; global `data/output.json`
+dosyası yazılmaz. Paralel isteklerde veri yarışı yoktur.
 
 3B parametreleri:
 
@@ -115,7 +119,7 @@ Canlı `data/output.json` üst seviye alanları:
 ```text
 status, dem_out_of_bounds, warning_msg, meta, summary, decision,
 telemetry, optimizations, rover_traverse, windows, terrain_horizon_mask,
-site_comparison, samples
+site_comparison, samples, events
 ```
 
 Sık kullanılanlar:
@@ -135,7 +139,12 @@ Sık kullanılanlar:
 | `samples[].earth_elevation_deg` | derece, -90..+90 |
 | `terrain_horizon_mask` | 360 eleman, her derece için ufuk açısı |
 | `windows.sun`, `windows.earth` | başlangıç/bitiş ve saat cinsinden süre |
-| `site_comparison` | aday sahalar; `verdict` alanı ile |
+| `site_comparison` | aday sahalar; `verdict`, `min_battery_soc_pct`, `altitude_m` alanları ile |
+| `decision.blocker_wall.distance_km` | LOLA profilinde `null`; `distance_known` ile kontrol et |
+| `events.sun.visible_now` | başlangıç anında Güneş ufkun üstünde mi |
+| `events.sun.hours_to_sunset` / `hours_to_sunrise` | saat; yoksa `next_*_utc` alanı yok |
+| `events.earth.visible_now` / `hours_to_earthset` / `hours_to_earthrise` | Dünya için aynı |
+| `events.search_exhausted` | aralıkta geçiş bulunamadı |
 
 Canlı çıktıda `status` değeri `SUCCESS` olur. `meta`, `decision`, `telemetry`, `optimizations` ve
 `rover_traverse` alanları çevrimdışı örnekte eksik olabilir; UI bunları opsiyonel kabul etmelidir.
@@ -149,33 +158,46 @@ Eski `metadata`, `warning` veya `status: "OK"` varsayımlarıyla kod yazma.
 
 ```text
 scenario_id, mission_mode, sim_elapsed_sec, base_utc, active_utc,
-landing_utc, range_days, sun, earth, moon_helio_km, spice_bodies,
-selected_site, sites, spacecraft, trajectory, landing_seconds,
-touchdown_report
+landing_utc, range_days, scene_model, physics_valid, frame,
+ephemeris_source, helio_model, trajectory_phase, terrain_is_synthetic,
+horizon_source, sun_visible, earth_visible, sun_horizon_deg, earth_horizon_deg,
+sun, earth, moon_helio_km, spice_bodies, selected_site, sites, spacecraft,
+trajectory, landing_seconds, touchdown_report
 ```
 
 Sık kullanılanlar:
 
 | Alan | Birim / anlam |
 |---|---|
-| `spacecraft.pos_km` | Ay merkezli km |
+| `spacecraft.pos_km` | Ay merkezli km, `frame: "IAU_MOON"` |
 | `spacecraft.vel_kms` | km/s |
-| `spacecraft.altitude_km` | km |
+| `spacecraft.altitude_km` | km, yerel sentetik zemine göre AGL |
 | `spacecraft.gravity_ms2` | m/s² |
 | `spacecraft.thrust_ms2` | m/s² |
-| `trajectory[].alt_km` | km |
-| `landing_seconds[].altitude_m` | metre |
+| `trajectory[].alt_km` | km, yerel sentetik zemine göre AGL |
+| `landing_seconds[].altitude_m` | metre, AGL |
 | `landing_seconds[].vertical_speed_ms` | m/s |
-| `landing_seconds[].sun_illumination_pct` | % |
-| `touchdown_report.success` | boolean |
+| `landing_seconds[].sun_disk_pct` | %; diskin geometrik aydınlanma oranı (ufuk görünürlüğü değil) |
+| `landing_seconds[].sun_vis` | boolean; ufuk maskesine göre gerçek görünürlük |
+| `horizon_source` | `"LOLA_80M_SKYLINE"` veya `"SYNTHETIC_ANALYTIC"` (2D ile aynı kaynak) |
+| `sun_visible` / `earth_visible` | boolean; secili sahada aktif anda ufuk gorunurlugu |
+| `touchdown_report.sun_disk_illuminated_pct` | %; disk oranı |
+| `touchdown_report.sun_visible` | boolean; ufuk maskesine göre |
+| `touchdown_report.success` | boolean; kinematik hedefe yaklaşma |
 | `touchdown_report.status_label` | Türkçe durum metni |
-| `touchdown_report.miss_distance_m` | metre |
+| `touchdown_report.miss_distance_m` | metre, sabitleme öncesi güdüm sapması |
+| `touchdown_report.trajectory_snapped_to_target` | görselleştirme için son nokta hedefe sabitlendi |
 | `touchdown_report.touchdown_speed_ms` | m/s |
 | `touchdown_report.flight_duration_sec` | saniye |
+| `touchdown_report.physics_valid` | her zaman `false`; kinematik model |
+| `touchdown_report.model` | `"kinematic-visualization"` |
+| `sites[].alt_source` | `"LOLA_80M"` veya `"SYNTHETIC_DEM"` |
 
-Mevcut 3B çıktıda `touchdown_report.outcome`, `fuel_remaining_kg` veya `reference_frame` alanları
-**yoktur**. Bunları varmış gibi kullanma. Alan eklenecekse önce `src/3b_moon.h` ve backend birlikte
-güncellenir.
+Mevcut 3B çıktıda `touchdown_report.outcome`, `fuel_remaining_kg`, `reference_frame` veya
+`touchdown_report.mission_score` alanları **yoktur**. 3B kinematik modeldir; `physics_valid=false`
+ise `success=true` yalnızca hedefe yaklaşıldığını gösterir, fiziksel doğrulama değildir.
+`helio_km` alanları analitik Kepler modelidir (`helio_model: "ANALYTIC_KEPLER"`); `pos_km` IAU_MOON'dur.
+Alan eklenecekse önce `src/3b_moon.h` ve backend birlikte güncellenir.
 
 ## 8. Frontend'te Yapılması Gerekenler
 
@@ -184,7 +206,7 @@ güncellenir.
 3. Eksik/opsiyonel alanları `undefined` kontrolüyle ele al.
 4. Backend kapalıysa `source: "offline-sample"` bilgisini kullanıcıya göster.
 5. 3B viewer'da `data/3b_scene.js` yüklüyse onu kullan; canlı API varsa `/3b` ile güncelle.
-6. Değişiklikten sonra `make test` çalıştır ve hangi alanları kullandığını PR'a yaz.
+6. Değişiklikten sonra `make test` ve `make validate` çalıştır; hangi alanları kullandığını PR'a yaz.
 7. UI'da “hesaplanan” değer ile “backend'den gelen” değeri karıştırma; tooltip/kaynak etiketi ekle.
 
 ## 9. Kesinlikle Yapılmaması Gerekenler
@@ -215,12 +237,12 @@ güncellenir.
 ## 11. Önerilen Frontend İş Akışı
 
 1. `AGENTS.md` ve bu dosyayı oku.
-2. `make clean && make && make test` ile backend'in çalıştığını doğrula.
+2. `make clean && make && make test && make validate` ile backend'in ve JSON'un tutarlı olduğunu doğrula.
 3. `./build/lunar_sim --serve 8080` başlat.
 4. Örnek isteği `curl` ile kontrol et; JSON'u kaydet.
 5. Sadece frontend dosyalarında değişiklik yap.
 6. Backend açıkken canlı, kapalıyken offline fallback'i ayrı ayrı test et.
-7. `make test` ve varsa frontend lint/build çalıştır.
+7. `make test`, `make validate` ve varsa frontend lint/build çalıştır.
 8. PR'da kullanılan JSON alanlarını ve test adımlarını yaz.
 
 ## 12. Yapay Zekâ Ajanı İçin Kopyala-Yapıştır Prompt
@@ -235,7 +257,7 @@ Kurallar:
 - Yeni JSON alan adı uydurma; mevcut alanları olduğu gibi kullan.
 - Backend çıktısını yeniden hesaplama; yalnızca gösterim birimi dönüşümü yap.
 - API'nin şu an GET tabanlı olduğunu, POST gövdesinin desteklenmediğini varsay.
-- Değişiklikten sonra make test çalıştır ve sonucu raporla.
+- Değişiklikten sonra `make test` ve `make validate` çalıştır ve sonucu raporla.
 
 Görev: <buraya frontend görevini yaz>
 ```

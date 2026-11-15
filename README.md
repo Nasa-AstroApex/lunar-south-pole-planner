@@ -1,209 +1,156 @@
-# Lunar South Pole Mission Planner — AstroApex
+# AstroApex — Lunar South Pole Mission Planner
 
-**NASA Space Apps Challenge 2026 | Lunar Landing Site Navigator**
+**NASA Space Apps Challenge 2026 · Lunar Landing Site Navigator**
 
-Ay'ın Güney Kutbu iniş sahaları için NASA CSPICE yörünge mekaniği, arazi ufuk maskelemesi ve
-Lua görev orkestrasyonunu birleştiren C11 tabanlı görev planlama motoru.
+A C11 mission-planning engine that turns real JPL ephemerides and LOLA terrain
+horizons into fast, decision-ready site/date trade studies for the lunar south pole.
 
-> **Kod yazmadan önce:** [`AGENTS.md`](AGENTS.md) ve [`docs/FRONTEND_GUIDE.md`](docs/FRONTEND_GUIDE.md)
-> dosyalarını oku. Bu iki dosya, özellikle yapay zekâ ajanlarının backend'i yanlışlıkla bozmasını
-> engellemek için bağlayıcıdır.
+> **30-second trade studies.** Pick a landing site and date, and immediately see the
+> Sun and Earth positions against the local horizon, the power and direct-to-Earth
+> (DTE) communication windows, and how a schedule slip changes everything.
 
-## Sistem Mimarisi
+---
 
-```text
-[NASA Kernels: .tls, .bsp, .tpc]       [LOLA / analitik arazi modeli]
-                 \                         /
-                  v                       v
-        [C11 Fizik Çekirdeği: src/cspice_math.c]
-                  |
-                  +--> [Lua skorlama: lua/main.lua] --> data/output.json
-                  |
-                  +--> [3B sahne: src/3b_moon.c] ----> data/3b_scene.json
-                                                        data/3b_scene.js
-                  |
-                  v
-        [HTTP / CLI: src/main.c]
-                  |
-        +---------+------------------+
-        |                            |
-  GET / (2D JSON)              GET /3b (3B JSON)
-        |                            |
-  ui-starter/ sözleşmesi      test_3b_viewer.html
+## What it does
+
+- **Real ephemerides** — Sun and Earth positions from NAIF CSPICE (`de440s.bsp`,
+  `pck00010.tpc`, `naif0012.tls`) in the `IAU_MOON` frame with light-time + stellar
+  aberration (`LT+S`).
+- **Terrain-aware horizons** — 360° horizon masks from real LOLA 80 m skyline
+  profiles for Shackleton Rim, Connecting Ridge, and Malapert Massif (Barker et al.
+  2023, NASA GSFC PGDA 90); synthetic analytic terrain elsewhere, always labeled.
+- **Sun/Earth visibility & windows** — hourly illumination fraction, DTE windows,
+  longest dark period, and the next sunset/sunrise and earthset/earthrise events.
+- **Five-site comparison** — Shackleton Rim, Connecting Ridge, Malapert Massif,
+  Nobile Rim 1, and Haworth, each with backend score and GO/CAUTION/NO-GO verdict.
+- **3B scene** — an `IAU_MOON` kinematic visualization of the spacecraft, descent
+  trajectory, and landing sites, clearly labeled as not physics-validated.
+- **Provenance everywhere** — every output marks its source: `CSPICE_DE440S_IAU_MOON`,
+  `LOLA_80M_SKYLINE`, `SYNTHETIC_ANALYTIC`, heuristic thermal/battery, and kinematic 3B.
+
+## Architecture
+
+```
+[NASA kernels: .tls, .bsp, .tpc]        [LOLA / analytic terrain]
+              \                            /
+               v                          v
+        [ C11 physics core: src/cspice_math.c ]
+               |             \
+               |              +--> [ Lua scoring: lua/main.lua ]
+               |                    -> data/output.json (2D mission plan)
+               v
+        [ 3B scene: src/3b_moon.c ]
+               -> data/3b_scene.json / .js (3B scene)
+
+        [ HTTP / CLI: src/main.c ]
+               |
+        GET /  (2D JSON)      GET /3b (3B JSON)      GET /compare (5-site JSON)
 ```
 
-## İki Ayrı Veri Modeli
+Two independent data models are produced and must never be mixed:
 
-Bu projede iki çıktı vardır ve bunlar **birbirine karıştırılmamalıdır**:
+1. **2D mission plan** → `data/output.json` (contract: `ui-starter/src/types/mission.ts`)
+2. **3B scene** → `data/3b_scene.json` / `data/3b_scene.js` (schema: `src/3b_moon.h`)
 
-1. **2D görev planı** → `data/output.json`
-   - Güneş/Dünya görünürlüğü, arazi ufku, iletişim pencereleri, aday saha karşılaştırması.
-   - Frontend sözleşmesi: `ui-starter/src/types/mission.ts`.
-2. **3B sahne** → `data/3b_scene.json`, `data/3b_scene.js`
-   - Uzay aracı konumu, iniş yörüngesi, iniş saniyeleri, touchdown raporu.
-   - Şema kaynağı: `src/3b_moon.h`.
-   - Referans görüntüleyici: `test_3b_viewer.html`.
-
-## Dizin Yapısı
-
-| Yol | Görev |
-|---|---|
-| `src/cspice_math.c` / `.h` | 2D fizik, CSPICE efemeris, arazi ufku, görünürlük pencereleri |
-| `src/3b_moon.c` / `.h` | 3B sahne, uzay aracı durumu, iniş yörüngesi |
-| `src/main.c` | CLI ve HTTP sunucusu |
-| `lua/main.lua` | Lua sıralama/skorlama katmanı |
-| `data/kernels/` | CSPICE kernel dosyaları |
-| `data/output.json` | Üretilen 2D çıktı |
-| `data/3b_scene.json` / `.js` | Üretilen 3B çıktı |
-| `ui-starter/` | 2D TypeScript sözleşmesi ve API istemcisi |
-| `test_3b_viewer.html` | Referans 3B görüntüleyici |
-| `ui/` | Eski statik mock; gerçek backend'e bağlı değildir |
-| `docs/` | Mimari ve frontend entegrasyon dokümanları |
-
-## Hızlı Başlangıç
-
-### Derleme
+## Build & run
 
 ```bash
-make clean && make
+make clean && make          # build/build/lunar_sim (+ MissionPlanner symlink)
+make test                   # smoke test (--once)
+make validate               # 2D + 3B + ranking JSON consistency checks
+make snapshots              # regenerate the static demo snapshot catalog + offline sample
 ```
 
-Bu komut `build/lunar_sim` dosyasını ve `MissionPlanner` bağlantısını üretir.
-
-### Çalıştırma
+### CLI
 
 ```bash
-./build/lunar_sim --once
+./build/lunar_sim --once \
+  "Shackleton Rim" -89.7668 -171.87 2026-10-18T00:00:00 14
 ```
 
-Beklenen örnek çıktı:
-
-```text
-[3B SPICE UNIVERSE] 13 Gok Cismi | Yörünge Hızı: 1.629 km/s | ...
-[C11 SUPER-CORE] Connecting Ridge (-89.46, -137.49) | ... | Karar: <GO|CAUTION|NO-GO> (<skor>/100)
-```
-
-### HTTP sunucusu
+### HTTP server
 
 ```bash
 ./build/lunar_sim --serve 8080
 ```
 
-Başka bir terminalde:
+```bash
+# 2D mission plan
+curl 'http://127.0.0.1:8080/?site=Shackleton%20Rim&lat=-89.7668&lon=-171.87&utc=2026-10-18T00:00:00&days=14'
+
+# 3B landing scene
+curl 'http://127.0.0.1:8080/3b?mode=0&t_sec=0&site=Connecting%20Ridge&lat=-89.4632&lon=-137.49'
+
+# Five-site comparison (race-free, in-memory)
+curl 'http://127.0.0.1:8080/compare?utc=2026-10-18T00:00:00&days=14'
+```
+
+The HTTP layer renders each response in memory (no shared-file writes), so parallel
+requests for site comparisons are safe.
+
+### CSPICE setup
+
+`cspice/` is not committed. Download the NAIF CSPICE C toolkit from
+<https://naif.jpl.nasa.gov/naif/toolkit_C.html>, extract it as `cspice/` at the repo
+root (`cspice/include/SpiceUsr.h`, `cspice/lib/cspice.a`), then `make clean && make`.
+Kernels are loaded from `data/kernels/`. If CSPICE is absent or the kernel set is
+incomplete, the engine fails closed rather than silently using a fallback ephemeris.
+
+## Web demo (no compiler required)
+
+The frontend is a static, display-only mission control in `ui-starter/`:
+
+- **Live mode** — when served from `localhost` (or `?live=1`), it fetches the running
+  C11 backend.
+- **Static mode** — otherwise it reads a pre-generated snapshot catalog
+  (`ui-starter/data/demo_snapshots.json`) with an exact-request match, and falls back
+  to `ui-starter/sample_output.json`.
+
+Serve it locally:
 
 ```bash
-# 2D görev planı
-curl 'http://127.0.0.1:8080/?site=Shackleton%20Rim&lat=-89.9&lon=0&utc=2026-10-29T14:30:00&days=14'
-
-# 3B iniş sahnesi
-curl 'http://127.0.0.1:8080/3b?mode=2&t_sec=1200&burn_sec=1200'
+python3 -m http.server 8000 --directory ui-starter
 ```
 
-### Test
+Then open <http://localhost:8000>. Deploy `ui-starter/` to any static host (GitHub
+Pages, Vercel, Netlify) for a login-free public demo. See
+`.github/workflows/pages.yml` for an optional GitHub Pages build.
 
-```bash
-make test               # smoke test: --once
-bash build.sh           # derleme + smoke test
-lua5.4 debug_pipeline.lua  # tam pipeline + 3B viewer
-```
+## Data provenance & honesty
 
-`make test` tam birim testi değildir; motorun çalıştığını doğrular.
-
-## API Sözleşmesi
-
-### 2D
-
-```text
-GET /?site=<ad>&lat=<derece>&lon=<derece>&utc=<ISO-8601>&days=<1-30>
-```
-
-`/3b` dışındaki tüm GET istekleri 2D simülasyonu çalıştırır ve `data/output.json` döndürür.
-
-### 3B
-
-```text
-GET /3b?mode=0|1|2&t_sec=<sn>&burn_sec=<sn>
-         &sc_lat=<derece>&sc_lon=<derece>&sc_alt=<km>&sc_speed=<km/s>
-         &site=<ad>&lat=<derece>&lon=<derece>
-```
-
-Dönen veri `data/3b_scene.json` dosyasıdır.
-
-### Bilinen sınırlama
-
-C sunucusu şu an **POST gövdesini parse etmez**. `ui-starter/src/services/plannerApi.ts` canlı
-isteği GET query parametreleriyle yapar. Backend'e POST desteği eklenirse API istemcisi de birlikte
-güncellenir. Bu farkı frontend'te fizik yazarak kapatmayın.
-
-## Veri ve Birimler
-
-- 2D açılar: derece. Süreler: saat veya saniye (alan adına göre).
-- 2D irtifa: metre. 3B `spacecraft.altitude_km`: kilometre.
-- 3B konum: km, hız: km/s, ivme: m/s².
-- 3B `landing_seconds[].altitude_m`: metre.
-- UTC metinleri backend'den geldiği gibi gösterilir; frontend'te yeniden hesaplanmaz.
-- `data/output.json`, `data/3b_scene.json`, `data/3b_scene.js` **üretilen** dosyalardır.
-  Elle düzenlenmez; `./build/lunar_sim --once` ile yeniden üretilir.
-
-## Veri Kaynakları ve Doğruluk
-
-Çıktıdaki her sayının nereden geldiği JSON içinde açıkça işaretlenir; sunumda bunları olduğu gibi aktarın.
-
-| Konu | Kaynak | JSON işareti |
+| Topic | Source | JSON marker |
 |---|---|---|
-| Güneş/Dünya konumu (CSPICE kuruluysa) | NASA NAIF CSPICE, `de440s.bsp` + `pck00010.tpc`, `IAU_MOON` çerçevesi, `LT+S` | `meta.ephemeris_source = "CSPICE_DE440S_IAU_MOON"` |
-| Güneş/Dünya konumu (CSPICE yoksa) | Meeus *Astronomical Algorithms* analitik serisi; tarihe bağlıdır, JPL Horizons ile doğrulanmış değerlerden sapma ~0,03° | `meta.ephemeris_source = "ANALYTIC_MEEUS_FALLBACK"` |
-| Ufuk maskesi: Shackleton Rim, Connecting Ridge, Malapert Massif merkezleri | Gerçek LOLA 80 m DEM ufuk profili (Barker ve ark. 2023, NASA GSFC PGDA ürün 90), `src/lola_horizons.h` | `meta.dem_info.horizon_source = "LOLA_80M_SKYLINE"` |
-| Ufuk maskesi: diğer tüm noktalar | **Sentetik** analitik arazi (gerçek DEM değildir) | `meta.dem_info.horizon_source = "SYNTHETIC_ANALYTIC"` |
-| Eğim, rover rotası, "buz" hedefi | Her zaman **sentetik** arazi | `meta.dem_info.terrain_is_synthetic = true` |
-| Sıcaklık, buz olasılığı, batarya (SoC) | Basitleştirilmiş sezgisel formüller; ölçüm veya doğrulanmış model değildir | — |
-| 3B iniş yörüngesi | Kütle/yakıt modeli olmayan kinematik görselleştirme; `touchdown_speed_ms` tasarım hedefidir | `touchdown_report.guidance_model` |
+| Sun/Earth position (CSPICE) | NAIF CSPICE DE440s, `IAU_MOON`, `LT+S` | `meta.ephemeris_source = "CSPICE_DE440S_IAU_MOON"` |
+| Sun/Earth position (fallback) | Meeus analytic series | `meta.ephemeris_source = "ANALYTIC_MEEUS_FALLBACK"` |
+| Horizon: 3 known sites | Real LOLA 80 m skyline (Barker et al. 2023) | `meta.dem_info.horizon_source = "LOLA_80M_SKYLINE"` |
+| Horizon: everywhere else | Synthetic analytic terrain | `meta.dem_info.horizon_source = "SYNTHETIC_ANALYTIC"` |
+| Slope, rover route, ice target | Synthetic terrain | `meta.dem_info.terrain_is_synthetic = true` |
+| Temperature, ice probability, battery | Heuristic formulas | labeled "Heuristic" |
+| 3B trajectory/touchdown | Kinematic visualization, no mass/fuel model | `physics_valid = false` |
+| 3B frame | Sun/Earth/site/spacecraft/trajectory in `IAU_MOON` | `frame = "IAU_MOON"` |
+| 3B descent phase | Post-burn descent, distinct from instantaneous orbit | `trajectory_phase = "POST_BURN_DESCENT"` |
 
-Açılar toposentriktir (yüzeydeki gözlemciden); Dünya için Ay yarıçapı kaynaklı ~0,27° paralaks hesaba katılır.
-Saha merkezleri NASA Lunar Surface Data Book Tablo A2-2 (NTRS 20230007818) değerleridir.
+The frontend is **display-only**: it never recomputes orbital motion, illumination,
+visibility, horizon masks, scores, or decisions. All values are copied from the
+backend JSON.
 
-### CSPICE kurulumu
+## NASA data & resources
 
-`cspice/` klasörü depoda yoktur (`.gitignore`). Gerçek SPICE efemerisi için NAIF'in CSPICE paketini
-<https://naif.jpl.nasa.gov/naif/toolkit_C.html> adresinden indirip depo köküne `cspice/` olarak açın
-(`cspice/include/SpiceUsr.h` ve `cspice/lib/cspice.a` bulunmalı), sonra `make clean && make` çalıştırın.
-Kernel'ler `data/kernels/` klasöründen otomatik yüklenir. CSPICE yoksa motor yine çalışır, ancak analitik
-yedeğe düşer ve bunu `ephemeris_source` alanında bildirir.
+- NAIF CSPICE + SPICE kernels — <https://naif.jpl.nasa.gov/>
+- JPL Horizons — <https://ssd.jpl.nasa.gov/horizons/>
+- LOLA south-pole DEMs — NASA GSFC PGDA 90, Barker et al. 2023,
+  <https://pgda.gsfc.nasa.gov/products/90>, DOI 10.60903/gsfcpgda-lola-spole
+- Quickmap — <https://quickmap.lroc.asu.edu/>
+- Moon Trek — <https://trek.nasa.gov/moon/>
+- Site coordinates — NASA Lunar Surface Data Book, Table A2-2 (NTRS 20230007818)
 
-## Frontend Kuralları
+## Notes
 
-1. **Fizik yazma.** Yörünge, Güneş/Dünya açısı, gölge, ufuk, sıcaklık, iniş veya skor hesabı
-   frontend'te yapılmaz. Yalnızca backend alanları gösterilir.
-2. **Alan adı uydurma.** 2D için `ui-starter/src/types/mission.ts`, 3B için `src/3b_moon.h`.
-3. **API katmanını kullan.** 2D istekleri `ui-starter/src/services/plannerApi.ts` üzerinden yapılır.
-4. **Fallback'i göster.** Backend kapalıysa `source === "offline-sample"` bilgisini UI'da belirt.
-5. **Üretilen veriyi düzenleme.** JSON dosyaları kaynak değil, çıktıdır.
-6. **Legacy mock'u geliştirme.** `ui/` altındaki eski arayüz gerçek backend'e bağlı değildir.
-7. **Backend'i UI için değiştirme.** Fizik sabitleri, kernel yolları ve şemalar keyfî değiştirilmez.
+- `make test` is a smoke test; `make validate` verifies internal consistency of the
+  2D + 3B + ranking JSON.
+- `data/output.json`, `data/3b_scene.json`, `data/3b_scene.js` are generated outputs;
+  do not edit them by hand.
+- The HTTP server reads only GET query parameters; POST bodies are not parsed.
 
-Ayrıntılı eşleştirme, sık yapılan hatalar ve AI prompt şablonu:
-[`docs/FRONTEND_GUIDE.md`](docs/FRONTEND_GUIDE.md).
-
-## Yapay Zekâ Ajanları İçin Kısa Kural
-
-> Yalnızca frontend katmanında çalış. `src/`, `lua/`, `cspice/`, `data/kernels/` ve üretilen
-> `data/*.json` dosyalarını değiştirme. Fizik hesaplama. Yeni JSON alanı uydurma. API şu an GET
-> tabanlıdır; POST gövdesinin desteklenmediğini varsay. Değişiklikten sonra `make test` çalıştır.
-
-## Sorun Giderme
-
-| Belirti | Kontrol |
-|---|---|
-| `make` hiçbir şey yapmıyor | `make clean && make` |
-| `make test` başarısız | `./build/lunar_sim --once` çıktısını ve kernel yolunu kontrol et |
-| 3B viewer boş | Önce `--once` ile `data/3b_scene.js` üret; tarayıcı konsolunu kontrol et |
-| API cevap vermiyor | `./build/lunar_sim --serve 8080` çalışıyor mu? |
-| `POST` isteği yanlış sonuç | Bilinen sınırlama: POST gövdesi okunmuyor; GET kullan |
-| SPICE verisi `false` görünüyor | `data/kernels/` ve kernel yükleme yolunu backend ekibiyle kontrol et |
-
-## Ek Dokümanlar
-
-- [`AGENTS.md`](AGENTS.md) — bağlayıcı kısa kurallar
-- [`docs/FRONTEND_GUIDE.md`](docs/FRONTEND_GUIDE.md) — frontend entegrasyon kılavuzu
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — bilimsel/teknik mimari
-- [`docs/UI_CONTRACT.md`](docs/UI_CONTRACT.md) — UI alan eşleştirme notları
+See `AGENTS.md`, `docs/FRONTEND_GUIDE.md`, `docs/ARCHITECTURE.md`, and
+`submission/` for details.

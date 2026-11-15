@@ -1,0 +1,10 @@
+build/
+cspice/
+data/kernels/
+data/3b_scene.js
+data/3b_scene.json
+data/output.json
+*.bsp
+*.bpc
+*.o
+*.a

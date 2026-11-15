@@ -61,6 +61,24 @@ export interface VisibilityWindow {
   duration_hours: number;
 }
 
+export interface BodyEvents {
+  visible_now: boolean;
+  next_sunset_utc?: string;
+  hours_to_sunset?: number;
+  next_sunrise_utc?: string;
+  hours_to_sunrise?: number;
+  next_earthset_utc?: string;
+  hours_to_earthset?: number;
+  next_earthrise_utc?: string;
+  hours_to_earthrise?: number;
+}
+
+export interface MissionEvents {
+  search_exhausted: boolean;
+  sun: BodyEvents;
+  earth: BodyEvents;
+}
+
 export interface TimeSample {
   step_index: number;
   utc: string;
@@ -123,6 +141,7 @@ export interface SiteComparison {
   longest_earth_hours?: number;
   dte_window_count?: number;
   altitude_m?: number;
+  min_battery_soc_pct?: number;
   avg_sun_elevation_deg?: number;
   avg_earth_elevation_deg?: number;
 }
@@ -135,7 +154,9 @@ export interface MissionDecision {
   qwen_05b_prompt_facts?: string;
   blocker_wall?: {
     azimuth_deg: number;
-    distance_km: number;
+    /** LOLA 80 m ufuk profilinde engel mesafesi yoktur; bu durumda null. */
+    distance_km: number | null;
+    distance_known?: boolean;
     elevation_deg: number;
   };
 }
@@ -174,6 +195,7 @@ export interface SimulationResponse {
   terrain_horizon_mask: number[];
   samples: TimeSample[];
   site_comparison: SiteComparison[];
+  events?: MissionEvents;
 }
 
 export type GoNoGoStatus = "GO" | "CAUTION" | "NO-GO";
@@ -192,9 +214,9 @@ export interface MissionRiskReport {
 
 export const DEFAULT_SIMULATION_REQUEST: SimulationRequest = {
   site_name: "Shackleton Rim",
-  latitude_deg: -89.9,
-  longitude_deg: 0.0,
-  altitude_m: 120,
+  latitude_deg: -89.7668,
+  longitude_deg: -171.87,
+  altitude_m: 770.5,
   use_custom_coords: false,
   start_utc: "2026-10-18T00:00:00",
   end_utc: "2026-11-01T00:00:00",
@@ -214,6 +236,6 @@ export const CANDIDATE_LANDING_SITES: Array<{
   { name: "Shackleton Rim", latitude_deg: -89.7668, longitude_deg: -171.87, altitude_m: 770.5 },
   { name: "Connecting Ridge", latitude_deg: -89.4632, longitude_deg: -137.49, altitude_m: 1943.3 },
   { name: "Malapert Massif", latitude_deg: -85.9948, longitude_deg: -0.23578, altitude_m: 4784.8 },
-  { name: "Nobile Rim 1", latitude_deg: -85.2, longitude_deg: 55.0, altitude_m: 2100 },
-  { name: "Haworth", latitude_deg: -87.45, longitude_deg: 354.8, altitude_m: 1650 },
+  { name: "Nobile Rim 1", latitude_deg: -85.2, longitude_deg: 53.5, altitude_m: 2150 },
+  { name: "Haworth", latitude_deg: -87.45, longitude_deg: -5.17, altitude_m: 1640 },
 ];

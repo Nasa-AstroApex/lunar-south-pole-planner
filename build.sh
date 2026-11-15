@@ -5,4 +5,5 @@ echo "[BUILD] Lunar South Pole Planner derleniyor..."
 make -j"$(nproc 2>/dev/null || echo 2)"
 echo "[TEST] Birim ve fizik dogrulama testleri calistiriliyor..."
 make test
+make validate
 echo "[OK] Derleme ve testler basariyla tamamlandi."

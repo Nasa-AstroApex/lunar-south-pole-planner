@@ -69,7 +69,7 @@ Sunucu:
 
 ```bash
 curl 'http://127.0.0.1:8080/3b?mode=2&t_sec=1200&burn_sec=1200'
-curl 'http://127.0.0.1:8080/?site=Shackleton%20Rim&lat=-89.9&lon=0&utc=2026-10-29T14:30:00&days=14'
+curl 'http://127.0.0.1:8080/?site=Shackleton%20Rim&lat=-89.7668&lon=-171.87&utc=2026-10-29T14:30:00&days=14'
 ```
 
 **Bilinen sınırlama:** Mevcut C sunucusu POST gövdesini okumaz. `plannerApi.ts` canlı isteği
@@ -81,7 +81,9 @@ Bu farkı “frontend'te fizik hesaplayarak” kapatmaya çalışma.
 ```bash
 make clean && make        # build/lunar_sim + MissionPlanner
 make test                 # smoke test (--once)
+make validate             # 2D + 3B + Lua JSON tutarlilik kontrolu
 make serve                # 8080
+make snapshots            # statik demo snapshot katalogu + ornek veri
 bash build.sh             # build + smoke test
 lua5.4 debug_pipeline.lua # tam pipeline + viewer
 ```
@@ -95,7 +97,7 @@ lua5.4 debug_pipeline.lua # tam pipeline + viewer
 3. Backend alanlarını **olduğu gibi** kullan; sadece görüntüleme birimi dönüşümü yap.
 4. Backend kapalıysa `runMissionSimulation` sonucundaki `source` alanını kontrol et:
    `live-backend` mi, `offline-sample` mı? UI'da göster.
-5. Değişiklikten sonra `make test` ve varsa frontend build/lint çalıştır.
+5. Değişiklikten sonra `make test` ve `make validate`, varsa frontend build/lint çalıştır.
 6. PR açıklamasına hangi JSON alanlarını kullandığını yaz.
 
 ## 7. Yapay Zekâ Ajanı İçin Kısa Talimat
@@ -103,7 +105,8 @@ lua5.4 debug_pipeline.lua # tam pipeline + viewer
 > Sen yalnızca frontend katmanında çalışıyorsun. `src/`, `lua/`, `cspice/`, `data/kernels/` ve
 > üretilen `data/*.json` dosyalarını değiştirme. Fizik, yörünge, gölge veya ışıklandırma hesabı yazma.
 > Yeni JSON alanı uydurma; `docs/FRONTEND_GUIDE.md` ve mevcut tipleri kullan. API şu an GET tabanlıdır;
-> POST gövdesinin desteklenmediğini varsay. Değişiklikten sonra `make test` çalıştır ve sonucu raporla.
+> POST gövdesinin desteklenmediğini varsay. Değişiklikten sonra `make test` ve `make validate`
+> çalıştır ve sonucu raporla.
 
 ## 8. PR Kontrol Listesi
 
@@ -112,4 +115,4 @@ lua5.4 debug_pipeline.lua # tam pipeline + viewer
 - [ ] JSON alan adları mevcut sözleşmeyle aynı mı?
 - [ ] Üretilen veri dosyaları elle değiştirilmedi mi?
 - [ ] Backend kapalıyken offline fallback çalışıyor mu?
-- [ ] `make test` başarılı mı?
+- [ ] `make test` ve `make validate` başarılı mı?

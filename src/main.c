@@ -90,29 +90,44 @@ static void parse_query_param(const char *query, const char *key, char *dst, siz
     }
 }
 
-static void send_file_response(int client, const char *filepath) {
-    FILE *jf = fopen(filepath, "rb");
-    if (!jf) return;
-    fseek(jf, 0, SEEK_END);
-    long fsz = ftell(jf);
-    fseek(jf, 0, SEEK_SET);
-    char *body = (char *)malloc((size_t)fsz + 1);
-    if (body) {
-        size_t nr = fread(body, 1, (size_t)fsz, jf);
-        body[nr] = '\0';
-        char hdr[512];
-        int hlen = snprintf(hdr, sizeof(hdr),
-            "HTTP/1.1 200 OK\r\n"
-            "Content-Type: application/json; charset=utf-8\r\n"
-            "Access-Control-Allow-Origin: *\r\n"
-            "Content-Length: %zu\r\n\r\n", nr);
-        ssize_t w1 = write(client, hdr, (size_t)hlen);
-        ssize_t w2 = write(client, body, nr);
-        (void)w1;
-        (void)w2;
-        free(body);
+static void send_buffer_response(int client, const char *body, size_t len) {
+    if (!body) return;
+    char hdr[512];
+    int hlen = snprintf(hdr, sizeof(hdr),
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: application/json; charset=utf-8\r\n"
+        "Access-Control-Allow-Origin: *\r\n"
+        "Cache-Control: no-store\r\n"
+        "Content-Length: %zu\r\n\r\n", len);
+    ssize_t w1 = write(client, hdr, (size_t)hlen);
+    ssize_t w2 = write(client, body, len);
+    (void)w1;
+    (void)w2;
+}
+
+static char *build_compare_json(const SimulationResult *res) {
+    if (!res) return NULL;
+    char *buf = NULL;
+    size_t sz = 0;
+    FILE *fp = open_memstream(&buf, &sz);
+    if (!fp) return NULL;
+    fprintf(fp, "{\n");
+    fprintf(fp, "  \"status\": \"SUCCESS\",\n");
+    fprintf(fp, "  \"meta\": { \"utc\": \"%s\", \"days\": %d, \"candidate_count\": %d },\n",
+            res->utc_start, res->duration_days, res->candidate_count);
+    fprintf(fp, "  \"site_comparison\": [\n");
+    for (int i = 0; i < res->candidate_count; i++) {
+        const CandidateComparison *c = &res->candidates[i];
+        fprintf(fp, "    {\"site_name\": \"%s\", \"latitude_deg\": %.4f, \"longitude_deg\": %.4f, \"altitude_m\": %.1f, \"illumination_percent\": %.1f, \"earth_visibility_percent\": %.1f, \"slope_deg\": %.1f, \"total_sun_hours\": %.1f, \"longest_sun_hours\": %.1f, \"total_earth_hours\": %.1f, \"longest_earth_hours\": %.1f, \"dte_window_count\": %d, \"overlap_hours\": %.1f, \"longest_dark_hours\": %.1f, \"min_battery_soc_pct\": %.1f, \"mission_score\": %d, \"verdict\": \"%s\"}%s\n",
+                c->site_name, c->latitude_deg, c->longitude_deg, c->altitude_m, c->illumination_percent,
+                c->earth_visibility_percent, c->slope_deg, c->total_sun_hours, c->longest_sun_hours,
+                c->total_earth_hours, c->longest_earth_hours, c->dte_window_count,
+                c->overlap_hours, c->longest_dark_hours, c->min_battery_soc_pct,
+                c->mission_score, c->verdict, (i + 1 < res->candidate_count) ? "," : "");
     }
-    fclose(jf);
+    fprintf(fp, "  ]\n}\n");
+    fclose(fp);
+    return buf;
 }
 
 static void run_http_server(int port) {
@@ -145,7 +160,14 @@ static void run_http_server(int port) {
         char req[2048] = {0};
         ssize_t r = read(client, req, sizeof(req) - 1);
         if (r > 0) {
-            bool is_3b = (strncmp(req, "GET /3b", 7) == 0);
+            /* "/3b" tam yol olmalidir; "/3bx" gibi yollar 2D'ye duser. */
+            const char *target = (strncmp(req, "GET ", 4) == 0) ? req + 4 : "";
+            bool is_3b = (strncmp(target, "/3b", 3) == 0 &&
+                          (target[3] == '\0' || target[3] == '?' ||
+                           target[3] == ' ' || target[3] == '/'));
+            bool is_compare = (strncmp(target, "/compare", 8) == 0 &&
+                               (target[8] == '\0' || target[8] == '?' ||
+                                target[8] == ' ' || target[8] == '/'));
             char site[64] = "Connecting Ridge";
             char lat_s[32] = "-89.4632";
             char lon_s[32] = "-137.49";
@@ -185,6 +207,7 @@ static void run_http_server(int port) {
 
             if (is_3b) {
                 Moon3BScene *sc3b = (Moon3BScene *)calloc(1, sizeof(Moon3BScene));
+                char *body = NULL;
                 if (sc3b) {
                     compute_3b_moon_scene(
                         sc3b, atoi(scen_s), atoi(mode_s), atof(tsec_s), atof(bsec_s),
@@ -193,17 +216,29 @@ static void run_http_server(int port) {
                         site, atof(lat_s), atof(lon_s), atoi(cust_s) != 0,
                         atof(vx_s), atof(vy_s), atof(vz_s)
                     );
-                    export_3b_scene_json("data/3b_scene.json", "data/3b_scene.js", sc3b);
+                    body = export_3b_scene_json_string(sc3b);
                     free(sc3b);
                 }
-                send_file_response(client, "data/3b_scene.json");
+                if (body) {
+                    send_buffer_response(client, body, strlen(body));
+                    free(body);
+                }
+            } else if (is_compare) {
+                SimulationResult *res = run_lunar_simulation(site, atof(lat_s), atof(lon_s), utc, atoi(days_s));
+                char *body = build_compare_json(res);
+                if (body) {
+                    send_buffer_response(client, body, strlen(body));
+                    free(body);
+                }
+                if (res) free_simulation_result(res);
             } else {
                 SimulationResult *res = run_lunar_simulation(site, atof(lat_s), atof(lon_s), utc, atoi(days_s));
-                if (res) {
-                    export_simulation_json("data/output.json", res);
-                    free_simulation_result(res);
+                char *body = export_simulation_json_string(res);
+                if (body) {
+                    send_buffer_response(client, body, strlen(body));
+                    free(body);
                 }
-                send_file_response(client, "data/output.json");
+                if (res) free_simulation_result(res);
             }
         }
         close(client);
@@ -212,7 +247,12 @@ static void run_http_server(int port) {
 
 int main(int argc, char **argv) {
     ensure_data_dir();
-    init_spice_engine("data/kernels/meta_kernel.tm");
+    if (!init_spice_engine("data/kernels/meta_kernel.tm")) {
+        fprintf(stderr,
+                "[HATA] SPICE baslatilamadi. Sahte/fallback efemeris ile devam edilmiyor.\n"
+                "       Kurulum: cspice/ kutuphanesi + data/kernels/{naif0012.tls,de440s.bsp,pck00010.tpc}\n");
+        return 1;
+    }
 
     if (argc >= 2 && strcmp(argv[1], "--serve") == 0) {
         int port = (argc >= 3) ? atoi(argv[2]) : 8080;

@@ -5,10 +5,11 @@
  * Frontend yeni 3B alanı uyduramaz; alan eklenecekse burası + backend + UI birlikte güncellenir.
  *
  * Birimler:
- *   pos_km / pos_moon_km / helio_pos_km : km
- *   vel_kms                            : km/s
- *   altitude_km                        : km
- *   altitude_m                         : metre
+ *   pos_km / pos_moon_km               : km, IAU_MOON çerçevesi
+ *   helio_pos_km                       : km, analitik Kepler yaklaşımı
+ *   vel_kms                            : km/s, IAU_MOON
+ *   altitude_km                        : km, yerel sentetik zemine göre AGL
+ *   altitude_m                         : metre, AGL
  *   gravity_ms2 / thrust_ms2           : m/s²
  *   açı alanları                       : derece
  *
@@ -35,8 +36,9 @@ typedef struct {
     char name[64];
     double lat_deg;
     double lon_deg;
-    double altitude_m;
-    double slope_deg;
+    double altitude_m;          // ortalama Ay yarıçapına göre mutlak zemin yüksekliği
+    bool altitude_is_lola;      // true: LOLA 80 m zemin; false: sentetik DEM
+    double slope_deg;           // her zaman sentetik DEM'den
     double sun_el_deg;
     double earth_el_deg;
     bool is_custom;
@@ -48,8 +50,8 @@ typedef struct {
     char category[24];          // "STAR", "PLANET", "MOON", "ASTEROID", "NEO"
     char orbit_parent[16];      // "NONE", "SUN", "EARTH"
     bool from_spice_kernel;
-    double pos_moon_km[3];      // Ay merkezli konum (km)
-    double helio_pos_km[3];     // Güneş merkezli gerçek konum (km)
+    double pos_moon_km[3];      // Ay merkezli konum (km, IAU_MOON)
+    double helio_pos_km[3];     // Güneş merkezli analitik Kepler konumu (km)
     double distance_km;         // Ay'a uzaklık (km)
     double radius_km;           // Gerçek fiziksel yarıçap (km)
     double semi_major_axis_km;  // Yörünge yarı-büyük ekseni (km)
@@ -67,7 +69,7 @@ typedef struct {
     double burn_elapsed_sec;          // İniş manevrası başladıysa geçen uçuş süresi (sn)
     double lat_deg;
     double lon_deg;
-    double altitude_km;
+    double altitude_km;               // yerel sentetik zemine göre AGL (km)
     double initial_speed_kms;         // Seçilen başlangıç hızı (km/s)
     double current_speed_kms;         // O anki anlık hız büyüklüğü (km/s)
     double pos_km[3];                 // O anki Ay merkezli X, Y, Z (km)
@@ -116,32 +118,42 @@ typedef struct {
     double altitude_m;
     double vertical_speed_ms;
     double sun_el_deg;
-    double sun_illumination_pct;
+    double sun_disk_illuminated_pct;  // diskin geometrik aydinlanma orani; ufuk gorunurlugu degildir
     double earth_el_deg;
     bool dte_connected;
-    bool sun_visible;
+    bool sun_visible;                 // ufuk maskesine gore gercek gorunurluk
     double surface_temp_k;
 } LandingSecondSample;
 
 typedef struct {
-    bool success;
+    bool success;              // kinematik hedefe yaklaşma; fiziksel doğrulama değil
     char status_label[48];
+    char model[48];
+    bool physics_valid;        // her zaman false
     char touchdown_utc[32];
     double flight_duration_sec;
-    double miss_distance_m;
+    double miss_distance_m;              // sabitleme oncesi gudum sapmasi
+    bool trajectory_snapped_to_target;   // gorsellestirme icin son nokta hedefe sabitlendi
     double touchdown_speed_ms;
     double total_dv_used_ms;
-    double sun_illumination_pct;
+    double sun_disk_illuminated_pct;
+    bool sun_visible;
     double earth_el_deg;
     bool dte_connected;
     double surface_temp_k;
-    int mission_score;
 } TouchdownReport3B;
 
 typedef struct {
     int scenario_id;
     int mission_mode;
     double sim_elapsed_sec;
+    char scene_model[48];
+    bool physics_valid;
+    char frame[24];             // sun/earth/spacecraft/trajectory/sites: "IAU_MOON"
+    char ephemeris_source[32];  // "CSPICE_DE440S_IAU_MOON" veya "ANALYTIC_MEEUS_FALLBACK"
+    char helio_model[32];       // helio_km alanlari icin "ANALYTIC_KEPLER"
+    char trajectory_phase[32];  // "POST_BURN_DESCENT": trajectory uzay aracinin anlik orbit hizindan farklidir
+    bool terrain_is_synthetic;  // zemin yuksekligi ve egim her zaman sentetik
     char base_utc[32];
     char active_utc[32];
     char landing_utc[32];
@@ -157,6 +169,14 @@ typedef struct {
     double sun_helio_km[3];
     double earth_helio_km[3];
     double moon_helio_km[3];
+
+    // Ufuk maskesi (2D cekirdekle ayni kaynak) ve secili sahada anlik gorunurluk
+    double horizon_mask_deg[360];
+    char horizon_source[32];
+    bool sun_visible;
+    bool earth_visible;
+    double sun_horizon_deg;
+    double earth_horizon_deg;
 
     int body_count;
     SpiceBody3B bodies[MOON3B_MAX_BODIES];
@@ -197,5 +217,7 @@ void compute_3b_moon_scene(
 );
 
 bool export_3b_scene_json(const char *json_path, const char *js_path, const Moon3BScene *scene);
+/* 3B sahneyi JSON olarak bellek tamponuna yazar; cagiran free() ile serbest birakir. */
+char *export_3b_scene_json_string(const Moon3BScene *scene);
 
 #endif // MOON_3B_H
