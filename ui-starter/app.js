@@ -94,6 +94,7 @@ let burnStartSimSec = 0.0;
 let missionMode = MODE_ORBIT;
 let animLoop = false;
 let lastFrameTime = performance.now();
+let lastHudMs = 0;
 let flownTrail = [];
 let touchdownPulse = 0.0;
 
@@ -110,7 +111,7 @@ const PRESET_SITES = [
   ["Shackleton Base (PSR)", -89.65, 115.0],
 ];
 
-const isLocalHost = ["localhost", "127.0.0.1", ""].includes(location.hostname) ||
+const isLocalHost = location.hostname === "localhost" || location.hostname === "127.0.0.1" ||
   new URLSearchParams(location.search).has("live");
 
 const stars = Array.from({ length: 380 }, (_, i) => ({
@@ -155,6 +156,16 @@ function xyzToLatLonAlt(pos) {
     lon: (Math.atan2(pos[1], pos[0]) * 180) / Math.PI,
     alt_km: r - R_MOON_KM,
   };
+}
+
+function cross3(a, b) {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+
+function norm3(a) {
+  const l = Math.hypot(a[0], a[1], a[2]);
+  if (l < 1e-12) return [1, 0, 0];
+  return [a[0] / l, a[1] / l, a[2] / l];
 }
 
 function projectKm(worldKm, focusOriginKm, cx, cy, scale) {
@@ -699,6 +710,18 @@ function applyCommandVector(vx, vy, vz) {
 /* ---------------- drawing ---------------- */
 const canvas = $("universe");
 const ctx = canvas.getContext("2d");
+let viewW = 0;
+let viewH = 0;
+let dpr = 1;
+
+function resizeCanvas() {
+  dpr = Math.min(2, window.devicePixelRatio || 1);
+  viewW = window.innerWidth;
+  viewH = window.innerHeight;
+  canvas.width = Math.round(viewW * dpr);
+  canvas.height = Math.round(viewH * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
 
 function drawUniverse(now) {
   const dtReal = Math.min(0.1, (now - lastFrameTime) / 1000);
@@ -720,14 +743,15 @@ function drawUniverse(now) {
     touchdownPulse = (touchdownPulse + dtReal * 1.4) % 1.0;
   }
 
-  updateHUD();
+  if (now - lastHudMs >= 100) {
+    lastHudMs = now;
+    updateHUD();
+  }
 
   const jd2000 = getCurrentJd2000();
   pxPerKm += (targetPxPerKm - pxPerKm) * 0.14;
 
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-  const W = canvas.width, H = canvas.height;
+  const W = viewW, H = viewH;
   const cx = W * 0.52, cy = H * 0.48;
 
   ctx.fillStyle = "#030508";
@@ -846,12 +870,23 @@ function drawUniverse(now) {
     }
 
     if (missionMode === MODE_ORBIT) {
-      const rOrb = Math.hypot(scWorld[0], scWorld[1], scWorld[2]);
+      const pos = scWorld;
+      const vel = sc.vel_kms;
+      const rOrb = Math.hypot(pos[0], pos[1], pos[2]);
+      const planeNormal = norm3(cross3(pos, vel));
+      const e1 = norm3(pos);
+      const e2 = norm3(cross3(planeNormal, e1));
       ctx.strokeStyle = "rgba(56, 189, 248, 0.22)";
       ctx.lineWidth = 1;
       ctx.beginPath();
       for (let a = 0; a <= 360; a += 8) {
-        const ov = latLonToVec(initOrbitParams.lat, a, rOrb);
+        const rad = (a * Math.PI) / 180;
+        const c = Math.cos(rad), s = Math.sin(rad);
+        const ov = [
+          rOrb * (e1[0] * c + e2[0] * s),
+          rOrb * (e1[1] * c + e2[1] * s),
+          rOrb * (e1[2] * c + e2[2] * s),
+        ];
         const op = projectKm([moonHelio[0] + ov[0], moonHelio[1] + ov[1], moonHelio[2] + ov[2]], focusOrigin, cx, cy, pxPerKm);
         if (a === 0) ctx.moveTo(op.x, op.y); else ctx.lineTo(op.x, op.y);
       }
@@ -960,21 +995,33 @@ function updateHUD() {
     4: "SCENARIO 4 — SECOND-BY-SECOND LANDING MOON STATE",
   };
   $("scen-title").textContent = titles[s];
-  $("scrubber-box").style.display = (s === 4 && missionMode === MODE_ORBIT) ? "block" : "none";
+  $("scrubber-box").style.display = (s === 4) ? "block" : "none";
 
   const sc = sceneData.spacecraft;
   const tgt = sceneData.selected_site;
   const rows = $("telemetry-rows");
 
-  if (missionMode === MODE_LANDED) {
+  if (s === 4) {
+    const idx = parseInt($("sec-slider").value, 10) || 30;
+    const smp = sceneData.landing_seconds[idx] || { offset_sec: idx - 30, utc: sceneData.landing_utc, phase: "TOUCHDOWN", alt_m: 0, vz_ms: 0, sun_disk_pct: 84.2, earth_el: 5.4, dte: true, sun_vis: true, temp_k: 285.0 };
+    $("sec-label").textContent = (smp.offset_sec >= 0 ? `T+${smp.offset_sec}s` : `T${smp.offset_sec}s`);
+    rows.innerHTML = `
+      <div class="row"><span>Landing second UTC</span><span class="val">${smp.utc} (${smp.offset_sec >= 0 ? "T+" + smp.offset_sec : "T" + smp.offset_sec}s)</span></div>
+      <div class="row"><span>Surface altitude / vertical speed</span><span class="val">${smp.alt_m.toFixed(1)} m | ${smp.vz_ms.toFixed(2)} m/s</span></div>
+      <div class="row"><span>Lunar surface illumination / DTE</span><span class="val">${smp.sun_disk_pct.toFixed(1)}% (${smp.sun_vis ? "SUN UP" : "SHADOW"}) | DTE: ${smp.dte ? "LINKED" : "DOWN"}</span></div>
+      <div class="row"><span>Surface temperature</span><span class="val">${smp.temp_k.toFixed(1)} K</span></div>`;
+  } else if (missionMode === MODE_LANDED) {
     const rep = sceneData.touchdown_report;
+    const ill = rep.sun_illumination_pct ?? rep.sun_disk_illuminated_pct ?? 0;
+    const tempK = rep.surface_temp_k ?? 0;
+    const dteUp = !!rep.dte_connected;
     rows.innerHTML = `
       <div class="report-box">
         <div class="report-title"><span>✓ LANDING STATUS REPORT — ${rep.status_label}</span><span>SCORE: — (kinematic)</span></div>
         <div class="row"><span>Target & Touchdown UTC</span><span class="val">${tgt.name} | ${rep.touchdown_utc}</span></div>
         <div class="row"><span>Flight time / ΔV spent</span><span class="val">${(rep.flight_duration_sec / 60).toFixed(1)} min | ${rep.total_dv_used_ms.toFixed(1)} m/s</span></div>
         <div class="row"><span>Touchdown speed / Target offset</span><span class="val">${rep.touchdown_speed_ms.toFixed(2)} m/s | ${rep.miss_distance_m.toFixed(1)} m</span></div>
-        <div class="row"><span>Instant illumination / Temp / DTE</span><span class="val">${rep.sun_disk_illuminated_pct.toFixed(1)}% (${rep.sun_visible ? "SUN UP" : "SHADOW"}) | ${rep.surface_temp_k.toFixed(1)} K | ${rep.dte_connected ? "DTE LINKED" : "DTE DOWN"}</span></div>
+        <div class="row"><span>Instant illumination / Temp / DTE</span><span class="val">${ill.toFixed(1)}% (${rep.sun_visible ? "SUN UP" : "SHADOW"}) | ${tempK.toFixed(1)} K | ${dteUp ? "DTE LINKED" : "DTE DOWN"}</span></div>
       </div>`;
   } else if (missionMode === MODE_DESCENT) {
     const remSec = Math.max(0, sc.transfer_time_sec - sc.burn_elapsed_sec);
@@ -1003,15 +1050,6 @@ function updateHUD() {
       <div class="row"><span>Descent ΔV / estimated flight time</span><span class="val">${sc.deorbit_dv_ms.toFixed(1)} m/s | ${(sc.transfer_time_sec / 60).toFixed(1)} min</span></div>
       <div class="row"><span>Target azimuth / elevation</span><span class="val">${sc.qibla_azimuth_deg.toFixed(1)}° / ${sc.qibla_elevation_deg.toFixed(1)}°</span></div>
       <div class="row"><span>Estimated landing UTC</span><span class="val">${sceneData.landing_utc}</span></div>`;
-  } else {
-    const idx = parseInt($("sec-slider").value, 10) || 30;
-    const smp = sceneData.landing_seconds[idx] || { offset_sec: idx - 30, utc: sceneData.landing_utc, phase: "TOUCHDOWN", alt_m: 0, vz_ms: 0, sun_disk_pct: 84.2, earth_el: 5.4, dte: true, sun_vis: true, temp_k: 285.0 };
-    $("sec-label").textContent = (smp.offset_sec >= 0 ? `T+${smp.offset_sec}s` : `T${smp.offset_sec}s`);
-    rows.innerHTML = `
-      <div class="row"><span>Landing second UTC</span><span class="val">${smp.utc} (${smp.offset_sec >= 0 ? "T+" + smp.offset_sec : "T" + smp.offset_sec}s)</span></div>
-      <div class="row"><span>Surface altitude / vertical speed</span><span class="val">${smp.alt_m.toFixed(1)} m | ${smp.vz_ms.toFixed(2)} m/s</span></div>
-      <div class="row"><span>Lunar surface illumination / DTE</span><span class="val">${smp.sun_disk_pct.toFixed(1)}% (${smp.sun_vis ? "SUN UP" : "SHADOW"}) | DTE: ${smp.dte ? "LINKED" : "DOWN"}</span></div>
-      <div class="row"><span>Surface temperature</span><span class="val">${smp.temp_k.toFixed(1)} K</span></div>`;
   }
 
   const badge = $("align-badge");
@@ -1145,7 +1183,22 @@ function bindControls() {
     });
   });
 
-  $("sec-slider").addEventListener("input", updateHUD);
+  $("sec-slider").addEventListener("input", () => {
+    if (sceneData.scenario_id !== 4) { updateHUD(); return; }
+    const idx = parseInt($("sec-slider").value, 10) || 30;
+    const smp = sceneData.landing_seconds[idx] || { offset_sec: idx - 30 };
+    const off = (smp.offset_sec != null) ? smp.offset_sec : (idx - 30);
+    if (missionMode !== MODE_DESCENT) {
+      missionMode = MODE_DESCENT;
+      burnStartSimSec = 0;
+      syncMissionButtons();
+    }
+    const totalT = sceneData.spacecraft.transfer_time_sec || 978;
+    simElapsedSec = totalT + off;
+    evaluateContinuousState();
+    updateHUD();
+    Debug.sim(`Scenario [4] scrub: ${off >= 0 ? "T+" + off : "T" + off}s · simElapsedSec ${simElapsedSec.toFixed(1)}s`);
+  });
 
   ["inp-utc", "inp-days", "inp-sclat", "inp-sclon", "inp-scalt", "inp-scspd"].forEach((id) => {
     $(id).addEventListener("change", () => {
@@ -1196,7 +1249,7 @@ function bindControls() {
   canvas.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     if (focusMode !== "MOON") return;
-    const cx = canvas.width * 0.52, cy = canvas.height * 0.48;
+    const cx = viewW * 0.52, cy = viewH * 0.48;
     const hit = unprojectToMoonLatLon(e.clientX, e.clientY, cx, cy, R_MOON_KM * pxPerKm);
     if (!hit) return;
     const customSite = {
@@ -1254,6 +1307,9 @@ async function boot() {
       siteSel.appendChild(opt);
     });
   }
+
+  resizeCanvas();
+  window.addEventListener("resize", resizeCanvas);
 
   syncVectorInputsFromSC();
   evaluateContinuousState();

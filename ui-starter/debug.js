@@ -42,7 +42,12 @@ const Debug = {
 
     document.addEventListener("keydown", (e) => {
       if (e.key === "d" || e.key === "D") {
-        if (["INPUT", "SELECT", "TEXTAREA"].includes(e.target.tagName)) return;
+        const t = e.target;
+        const isTyping = t && (
+          ["INPUT", "SELECT", "TEXTAREA"].includes(t.tagName) ||
+          t.isContentEditable === true
+        );
+        if (isTyping) return;
         e.preventDefault();
         this.toggle();
       }

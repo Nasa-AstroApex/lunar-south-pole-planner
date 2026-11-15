@@ -92,3 +92,16 @@ canvas#sc-mini:active { cursor: grabbing; }
 .lvl-sim .log-lvl { color: #22d3ee; }
 .lvl-boot .log-lvl { color: #a78bfa; }
 .lvl-runtime .log-lvl { color: #fb7185; }
+
+/* ---------- compact responsive (< 860px) ---------- */
+@media (max-width: 860px) {
+  .hud-top { gap: 4px; }
+  .btn-ui { padding: 4px 7px; font-size: 10px; }
+  .hud-panel { left: 8px; right: 8px; bottom: 8px; width: auto; max-width: none; }
+  .inputs-grid { grid-template-columns: repeat(2, 1fr); }
+  .inputs-grid-4 { grid-template-columns: repeat(2, 1fr); }
+  .sc-widget { right: 8px; bottom: auto; top: 46px; width: 216px; }
+  canvas#sc-mini { width: 196px; height: 150px; }
+  .vec-grid { grid-template-columns: repeat(3, 1fr); }
+  .debug-console { width: calc(100vw - 16px); right: 8px; top: 46px; }
+}
