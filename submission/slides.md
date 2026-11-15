@@ -10,7 +10,7 @@ Limit: 7 slides including title and intro. English only.
 
 Real JPL ephemerides · terrain-aware horizons · 30-second site/date trade studies
 
-Team: <names> · Challenge: Lunar Landing Site Navigator (NASA Space Apps 2026)
+Team: AstroApex · Challenge: Lunar Landing Site Navigator (NASA Space Apps 2026)
 
 ---
 

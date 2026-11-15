@@ -13,7 +13,10 @@
 #include "cspice_math.h"
 #include "3b_moon.h"
 #include <arpa/inet.h>
+#include <errno.h>
+#include <math.h>
 #include <netinet/in.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -55,6 +58,16 @@ static void run_lua_ranking_layer(void) {
     }
     lua_close(L);
 #endif
+}
+
+/* atof("nan") / atof("inf") kabul etme; gecersizse guvenli varsayilana don. */
+static double parse_finite_double(const char *s, double fallback) {
+    if (!s || !s[0]) return fallback;
+    char *end = NULL;
+    errno = 0;
+    double v = strtod(s, &end);
+    if (end == s || !isfinite(v)) return fallback;
+    return v;
 }
 
 static int hex_val(char c) {
@@ -131,6 +144,8 @@ static char *build_compare_json(const SimulationResult *res) {
 }
 
 static void run_http_server(int port) {
+    /* Istemci baglantiyi erken kapatirsa write() sureci oldurmesin. */
+    signal(SIGPIPE, SIG_IGN);
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
         perror("socket");
@@ -210,11 +225,11 @@ static void run_http_server(int port) {
                 char *body = NULL;
                 if (sc3b) {
                     compute_3b_moon_scene(
-                        sc3b, atoi(scen_s), atoi(mode_s), atof(tsec_s), atof(bsec_s),
+                        sc3b, atoi(scen_s), atoi(mode_s), parse_finite_double(tsec_s, 0.0), parse_finite_double(bsec_s, 0.0),
                         utc, atoi(days_s),
-                        atof(sclat_s), atof(sclon_s), atof(scalt_s), atof(scspd_s),
-                        site, atof(lat_s), atof(lon_s), atoi(cust_s) != 0,
-                        atof(vx_s), atof(vy_s), atof(vz_s)
+                        parse_finite_double(sclat_s, -38.0), parse_finite_double(sclon_s, -105.0), parse_finite_double(scalt_s, 110.0), parse_finite_double(scspd_s, 1.629),
+                        site, parse_finite_double(lat_s, -89.4632), parse_finite_double(lon_s, -137.49), atoi(cust_s) != 0,
+                        parse_finite_double(vx_s, 0.0), parse_finite_double(vy_s, 0.0), parse_finite_double(vz_s, 0.0)
                     );
                     body = export_3b_scene_json_string(sc3b);
                     free(sc3b);
@@ -224,7 +239,7 @@ static void run_http_server(int port) {
                     free(body);
                 }
             } else if (is_compare) {
-                SimulationResult *res = run_lunar_simulation(site, atof(lat_s), atof(lon_s), utc, atoi(days_s));
+                SimulationResult *res = run_lunar_simulation(site, parse_finite_double(lat_s, -89.4632), parse_finite_double(lon_s, -137.49), utc, atoi(days_s));
                 char *body = build_compare_json(res);
                 if (body) {
                     send_buffer_response(client, body, strlen(body));
@@ -232,7 +247,7 @@ static void run_http_server(int port) {
                 }
                 if (res) free_simulation_result(res);
             } else {
-                SimulationResult *res = run_lunar_simulation(site, atof(lat_s), atof(lon_s), utc, atoi(days_s));
+                SimulationResult *res = run_lunar_simulation(site, parse_finite_double(lat_s, -89.4632), parse_finite_double(lon_s, -137.49), utc, atoi(days_s));
                 char *body = export_simulation_json_string(res);
                 if (body) {
                     send_buffer_response(client, body, strlen(body));
@@ -266,8 +281,8 @@ int main(int argc, char **argv) {
     }
 
     const char *site = (argc > arg_idx)     ? argv[arg_idx]           : "Connecting Ridge";
-    double lat       = (argc > arg_idx + 1) ? atof(argv[arg_idx + 1]) : -89.4632;
-    double lon       = (argc > arg_idx + 2) ? atof(argv[arg_idx + 2]) : -137.49;
+    double lat       = (argc > arg_idx + 1) ? parse_finite_double(argv[arg_idx + 1], -89.4632) : -89.4632;
+    double lon       = (argc > arg_idx + 2) ? parse_finite_double(argv[arg_idx + 2], -137.49) : -137.49;
     const char *utc  = (argc > arg_idx + 3) ? argv[arg_idx + 3]       : "2026-10-29T14:30:00";
     int days         = (argc > arg_idx + 4) ? atoi(argv[arg_idx + 4]) : 14;
 

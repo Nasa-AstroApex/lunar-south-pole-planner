@@ -596,8 +596,10 @@ static void simulate_window_metrics(
         sun_frac_sum += sun_frac;
         if (dte_ok) dte_vis_hours++;
         if (sun_ok && dte_ok) overlap_h += 1.0;
-        /* SoC saat basindaki degeriyle raporlanir; ilk sample baslangic bataryasini gosterir. */
+        /* SoC saat basindaki degeriyle raporlanir; ilk sample baslangic bataryasini gosterir.
+           min_soc de ayni ornekleme noktalarindan hesaplanir; telemetry ile samples tutarli olur. */
         if (full_target) full_target->timeline_soc_pct[h] = soc;
+        if (soc < min_soc) min_soc = soc;
 
         if (sun_ok) {
             cur_sun += 1.0;
@@ -639,8 +641,6 @@ static void simulate_window_metrics(
             }
             earth_win_start = -1;
         }
-
-        if (soc < min_soc) min_soc = soc;
 
         if (full_target) {
             full_target->timeline_sun_az[h]   = s_az;

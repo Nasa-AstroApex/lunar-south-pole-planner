@@ -2,8 +2,8 @@
 
 English, 30 seconds or less. English subtitles if spoken in another language.
 
-- 0:00–0:03 — "I'm <name>, from team <name>. We built AstroApex for Lunar Landing
-  Site Navigator."
+- 0:00–0:03 — "We are Team AstroApex. We built AstroApex for Lunar Landing Site
+  Navigator."
 - 0:03–0:07 — "South-pole missions live or die on lighting and comms. Picking a site
   and date today means juggling three NASA tools for hours."
 - 0:07–0:12 — "AstroApex turns that into 30 seconds. Pick Shackleton Rim, set a date —

@@ -17,6 +17,7 @@ import { drawHorizon, drawTimeline } from "./plots.js";
 import { SceneView } from "./scene3d.js";
 
 const API_BASE = "http://127.0.0.1:8080";
+const CUSTOM_SITE_VALUE = "__custom";
 
 const PRESET_SITES = [
   { name: "Shackleton Rim", latitude_deg: -89.7668, longitude_deg: -171.87 },
@@ -86,17 +87,31 @@ function buildUrl(params) {
   return url.toString();
 }
 
+/* datetime-local input is interpreted as UTC by contract; never let the browser
+   apply the local timezone. "2026-10-18T00:00" -> "2026-10-18T00:00:00". */
+function normalizeUtcInput(value) {
+  if (!value) return "";
+  return value.length === 16 ? `${value}:00` : value;
+}
+
+function addDaysUtc(value, days) {
+  // Append Z so the arithmetic is UTC, independent of the viewer's timezone.
+  const d = new Date(`${normalizeUtcInput(value)}Z`);
+  if (!Number.isFinite(d.getTime())) return value;
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 16);
+}
+
 function currentRequest() {
-  const custom = els.siteSelect.value === "Custom";
-  const lat = custom ? Number(els.latitudeInput.value) : PRESET_SITES.find((s) => s.name === els.siteSelect.value).latitude_deg;
-  const lon = custom ? Number(els.longitudeInput.value) : PRESET_SITES.find((s) => s.name === els.siteSelect.value).longitude_deg;
-  const start = new Date(els.startInput.value);
-  const startUtc = `${start.getUTCFullYear()}-${String(start.getUTCMonth() + 1).padStart(2, "0")}-${String(start.getUTCDate()).padStart(2, "0")}T${String(start.getUTCHours()).padStart(2, "0")}:${String(start.getUTCMinutes()).padStart(2, "0")}:00`;
+  const custom = els.siteSelect.value === CUSTOM_SITE_VALUE;
+  const preset = PRESET_SITES.find((s) => s.name === els.siteSelect.value);
+  const lat = custom ? Number(els.latitudeInput.value) : (preset ? preset.latitude_deg : NaN);
+  const lon = custom ? Number(els.longitudeInput.value) : (preset ? preset.longitude_deg : NaN);
   return {
     site_name: custom ? "Custom" : els.siteSelect.value,
     latitude_deg: lat,
     longitude_deg: lon,
-    start_utc: startUtc,
+    start_utc: normalizeUtcInput(els.startInput.value),
     days: Number(els.daysSelect.value),
   };
 }
@@ -160,13 +175,23 @@ function clearNotice() {
 async function runStudy({ slip = false } = {}) {
   clearNotice();
   if (slip) {
-    const start = new Date(els.startInput.value);
-    start.setUTCDate(start.getUTCDate() + 21);
-    els.startInput.value = start.toISOString().slice(0, 16);
+    els.startInput.value = addDaysUtc(els.startInput.value, 21);
   }
 
   els.loadingTrack.hidden = false;
   const request = currentRequest();
+  if (!Number.isFinite(request.latitude_deg) || !Number.isFinite(request.longitude_deg) ||
+      !Number.isFinite(request.days) || !request.start_utc) {
+    els.loadingTrack.hidden = true;
+    setNotice("Invalid request", "Enter a valid site (or custom latitude/longitude), a start time, and a duration.", "error");
+    return;
+  }
+  if (request.latitude_deg < -90 || request.latitude_deg > 90 ||
+      request.longitude_deg < -180 || request.longitude_deg > 180) {
+    els.loadingTrack.hidden = true;
+    setNotice("Coordinates out of range", "Latitude must be -90..90 and longitude -180..180.", "error");
+    return;
+  }
 
   let result = null;
   let scenario = null;
@@ -220,7 +245,7 @@ function applyScenario(scenario) {
     els.siteSelect.value = preset.name;
     els.customCoordinates.hidden = true;
   } else {
-    els.siteSelect.value = "Custom";
+    els.siteSelect.value = CUSTOM_SITE_VALUE;
     els.latitudeInput.value = r.latitude_deg;
     els.longitudeInput.value = r.longitude_deg;
     els.customCoordinates.hidden = false;
@@ -404,7 +429,7 @@ function renderTimelineWindows() {
   els.earthWindowList.innerHTML = "";
   const meta = state.data?.meta || {};
   const totalH = ((meta.end_utc && meta.start_utc)
-    ? (new Date(meta.end_utc) - new Date(meta.start_utc)) / 3_600_000 : null);
+    ? (new Date(`${meta.end_utc}Z`) - new Date(`${meta.start_utc}Z`)) / 3_600_000 : null);
   els.timelineRange.textContent = Number.isFinite(totalH) ? `${totalH.toFixed(0)} h window` : "Not available";
   (w.sun || []).forEach((win) => {
     const li = document.createElement("li");
@@ -621,7 +646,7 @@ function bindEvents() {
   });
   els.slipButton.addEventListener("click", () => runStudy({ slip: true }));
   els.siteSelect.addEventListener("change", () => {
-    els.customCoordinates.hidden = els.siteSelect.value !== "Custom";
+    els.customCoordinates.hidden = els.siteSelect.value !== CUSTOM_SITE_VALUE;
   });
   els.scenarioSelect.addEventListener("change", () => {
     const list = (state.snapshots && state.snapshots.scenarios) || [];
