@@ -1,1 +1,34 @@
+name: Deploy static demo to GitHub Pages
 
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The static demo lives in ui-starter/ and reads the committed snapshot catalog
+      # (ui-starter/data/demo_snapshots.json) and offline sample. Regenerate them
+      # locally with `make snapshots` and commit the results before deploying.
+      - name: Upload ui-starter as the site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ui-starter
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
